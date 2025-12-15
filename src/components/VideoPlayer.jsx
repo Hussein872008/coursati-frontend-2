@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Hls from 'hls.js';
 import { videosAPI } from '../utils/api';
+import api from '../utils/api';
 import { useAuth } from '../hooks/useAuth';
 
 export default function VideoPlayer({ video }) {
@@ -151,7 +152,11 @@ export default function VideoPlayer({ video }) {
 
     // include userCode (if available) so backend authMiddleware can validate playlist requests
     const userCode = (typeof window !== 'undefined') ? localStorage.getItem('userCode') : null;
-    const playlistUrl = `/api/videos/${video._id}/playlist/${currentQuality}.m3u8${userCode ? `?userCode=${encodeURIComponent(userCode)}` : ''}`;
+    // Prefer explicit backend base from axios instance (VITE_API_BASE). Fallback to relative path.
+    const backendBaseRaw = (api && api.defaults && api.defaults.baseURL) ? api.defaults.baseURL : '';
+    const backendBase = backendBaseRaw ? backendBaseRaw.replace(/\/$/, '') : '';
+    const pathPart = `/api/videos/${video._id}/playlist/${currentQuality}.m3u8`;
+    const playlistUrl = (backendBase ? `${backendBase}${pathPart}` : pathPart) + (userCode ? `?userCode=${encodeURIComponent(userCode)}` : '');
 
     // Destroy previous hls instance
     if (hlsRef.current) {

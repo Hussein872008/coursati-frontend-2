@@ -242,6 +242,19 @@ const ChapterLecturesPage = () => {
             border-radius: 9999px; border: 2px solid rgba(255,255,255,0.03); box-shadow: inset 0 0 6px rgba(0,0,0,0.4);
           }
           .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: linear-gradient(180deg, #6366f1, #06b6d4); }
+          /* Scrollbar for lecture content area */
+          .lecture-scrollbar { scrollbar-width: thin; scrollbar-color: rgba(99,102,139,0.9) transparent; }
+          .lecture-scrollbar::-webkit-scrollbar { width: 12px; }
+          .lecture-scrollbar::-webkit-scrollbar-track { background: transparent; }
+          .lecture-scrollbar::-webkit-scrollbar-thumb {
+            background: linear-gradient(180deg, rgba(99,102,241,0.95), rgba(6,182,212,0.95));
+            border-radius: 9999px;
+            border: 3px solid transparent;
+            background-clip: padding-box;
+            box-shadow: inset 0 0 8px rgba(0,0,0,0.35);
+          }
+          .lecture-scrollbar::-webkit-scrollbar-thumb:hover { background: linear-gradient(180deg, #7c3aed, #06b6d4); transform: scaleY(1.02); }
+          .lecture-scrollbar::-webkit-scrollbar-thumb:active { transform: scaleY(1.05); }
         `}</style>
         {/* رسالة الخطأ */}
         {error && (
@@ -458,7 +471,7 @@ const ChapterLecturesPage = () => {
                   </div>
 
                   {/* محتوى المحاضرة */}
-                  <div className="flex-1 overflow-y-auto" dir="rtl">
+                  <div className="flex-1 overflow-y-auto lecture-scrollbar" dir="rtl">
                     <div className="p-6 space-y-6">
                       {/* حالات العرض */}
                       {pdfsLoading ? (
