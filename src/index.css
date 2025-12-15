@@ -1,0 +1,111 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  @apply bg-transparent;
+  font-family: 'Cairo', system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+}
+
+/* Small helpers for RTL-friendly spacing */
+[dir="rtl"] .ml-2 { margin-left: 0.5rem; }
+[dir="rtl"] .mr-2 { margin-right: 0.5rem; }
+
+/* Keyframes moved from LoginPage for global usage */
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  10%, 30%, 50%, 70%, 90% { transform: translateX(-5px); }
+  20%, 40%, 60%, 80% { transform: translateX(5px); }
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-20px) rotate(180deg); }
+}
+
+.animate-float {
+  /* float animation is decorative and costly; disable by default for performance */
+  animation: none !important;
+}
+
+/* Admin UI shared styles */
+.admin-card {
+  /* remove backdrop blur and reduce shadow to improve rendering performance */
+  @apply bg-white/5 border border-white/10 rounded-2xl shadow-lg text-white;
+}
+
+.admin-card-hover {
+  /* limit transition to opacity & transform and shorten duration */
+  @apply transition-opacity transition-transform duration-150 transform hover:shadow-lg;
+}
+
+.admin-accent-btn {
+  @apply bg-gradient-to-r from-cyan-600 via-blue-600 to-purple-600 text-white font-semibold rounded-xl px-4 py-2 shadow-lg;
+}
+
+/* Global overrides to neutralize heavy utilities without changing markup */
+.backdrop-blur, .backdrop-blur-sm, .backdrop-blur-md, .backdrop-blur-lg, .backdrop-blur-xl {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* Reduce very large shadows to moderate ones */
+.shadow-2xl { box-shadow: 0 10px 15px rgba(0,0,0,0.18) !important; }
+.shadow-xl { box-shadow: 0 8px 12px rgba(0,0,0,0.12) !important; }
+
+/* Limit transition-all to opacity & transform with short duration */
+.transition-all {
+  transition-property: opacity, transform !important;
+  transition-duration: 150ms !important;
+  transition-timing-function: ease-out !important;
+}
+
+/* Disable pulsing animations which can cause repaints; keep spin for critical loaders */
+.animate-pulse { animation: none !important; }
+.animate-fade { transition: opacity 150ms ease-out !important; }
+
+/* Remove heavy floating animation globally */
+.animate-float { animation: none !important; }
+
+/* Viewer popover scroll area and custom scrollbar */
+.viewer-scroll {
+  max-height: 24rem; /* larger max height for long viewers lists */
+  overflow-y: auto;
+  padding-right: 0.25rem; /* small safe gutter so content doesn't hide under scrollbar */
+}
+
+.viewer-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+.viewer-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.viewer-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.06);
+  border-radius: 9999px;
+  border: 2px solid transparent; /* creates a small padding effect */
+  background-clip: padding-box;
+}
+.viewer-scroll:hover::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.12);
+}
+
+/* Firefox */
+.viewer-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.08) transparent;
+}
+
+/* Small utility so inner items don't stick to edges */
+.viewer-scroll > * { padding-right: 0.25rem; }
