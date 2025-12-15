@@ -132,7 +132,7 @@ const NotificationBell = () => {
             {notifications.map((n) => (
               <div
                 key={n._id}
-                onClick={() => { goToLecture(n); handleMarkRead(n._id); }}
+                onClick={async () => { await handleMarkRead(n._id); goToLecture(n); }}
                 className={`flex gap-3 p-3 rounded-md cursor-pointer transition-all duration-200
                   ${n.isRead ? 'bg-gray-700/50 hover:bg-gray-700/60' : 'bg-gradient-to-r from-blue-600/70 to-blue-500/70 hover:from-blue-500/80 hover:to-blue-400/80'}`}
               >

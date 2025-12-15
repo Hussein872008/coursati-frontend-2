@@ -486,67 +486,77 @@ const ChapterLecturesPage = () => {
                       ) : (
                         <div className="space-y-3">
                           {/* Videos section - always shown regardless of PDFs */}
-                          {videosLoading ? (
-                            <div className="text-white/70">جاري تحميل الفيديوهات...</div>
-                          ) : videos.length === 0 ? (
-                            <div className="p-4 rounded-lg bg-white/5 border border-white/10 text-white/70">
-                              لا توجد فيديوهات لهذه المحاضرة.
-                            </div>
-                          ) : (
-                            <div className="space-y-2">
-                              <h4 className="text-lg font-semibold text-white">فيديوهات المحاضرة</h4>
-                              {videos.map((v, idx) => (
-                                <button
-                                  key={v._id}
-                                  onClick={() => {
-                                        setSelectedVideo(v);
-                                        // record lecture view and specific video view when user starts a video
-                                        (async () => {
-                                          try { await lecturesAPI.viewLecture(selectedLectureId); } catch (e) {}
-                                          try { await videosAPI.viewVideo(v._id); } catch (e) {}
-                                        })();
-                                    try {
-                                      const qp = new URLSearchParams(window.location.search);
-                                      qp.set('lecture', selectedLectureId || chapter?.lectures?.[0]?._id || '');
-                                      qp.set('video', v._id);
-                                      const qs = qp.toString();
-                                      window.history.pushState(null, '', `/chapter/${chapterId}${qs ? `?${qs}` : ''}`);
-                                    } catch (e) {}
-                                  }}
-                                  className={`group block w-full text-right p-4 rounded-xl transition-all duration-300 border hover:bg-gradient-to-r hover:from-cyan-500/20 hover:to-blue-500/20 ${selectedVideo && String(selectedVideo._id) === String(v._id) ? 'bg-gradient-to-r from-green-600/10 to-green-400/5 border-green-400/30 ring-1 ring-green-400' : 'bg-gradient-to-r from-gray-700/30 to-gray-800/30 border-white/10 hover:border-cyan-500/50'}`}
-                                  aria-current={selectedVideo && String(selectedVideo._id) === String(v._id) ? 'true' : undefined}
-                                >
-                                  <div className="flex items-center gap-4 h-auto sm:h-14">
-                                    <div className="flex-shrink-0 w-12 h-12 bg-cyan-600/20 border border-cyan-600/30 rounded-lg flex items-center justify-center group-hover:scale-105 transition-transform">
-                                      <PlayCircleIcon className="w-6 h-6 text-cyan-300" />
-                                    </div>
-                                    <div className="flex-1 min-w-0">
-                                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                                        <div className="flex-1 min-w-0">
-                                          <h4 className={`font-semibold whitespace-normal break-words ${selectedVideo && String(selectedVideo._id) === String(v._id) ? 'text-green-300' : 'text-white group-hover:text-cyan-300'} transition-colors`}>
-                                            {idx + 1}. {v.title}
-                                          </h4>
-                                        </div>
-                                        <div className="flex items-center gap-2">
-                                          <span className="mt-2 sm:mt-0 px-2 py-1 bg-cyan-500/20 text-cyan-300 text-xs rounded font-medium flex-shrink-0">فيديو</span>
-                                          {selectedVideo && String(selectedVideo._id) === String(v._id) && (
-                                            <span className="mt-2 sm:mt-0 px-2 py-1 bg-green-500/20 text-green-300 text-xs rounded font-semibold flex-shrink-0">مشغّل</span>
-                                          )}
-                                        </div>
-                                      </div>
-                                    </div>
-                                    <div className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                                      <div className={`p-2 rounded-lg ${selectedVideo && String(selectedVideo._id) === String(v._id) ? 'bg-green-500/10' : 'bg-cyan-500/10'}`}>
-                                        <svg className="w-5 h-5 text-cyan-300" viewBox="0 0 24 24" fill="currentColor">
-                                          <path d="M8 5v14l11-7z" />
-                                        </svg>
-                                      </div>
-                                    </div>
-                                  </div>
-                                </button>
-                              ))}
-                            </div>
-                          )}
+                          <div className="space-y-3">
+  {/* Videos section - always shown regardless of PDFs */}
+  {videosLoading ? (
+    <div className="text-white/70">جاري تحميل الفيديوهات...</div>
+  ) : videos.length === 0 ? (
+    <div className="flex flex-col items-center justify-center py-8 text-center">
+      <div className="w-20 h-20 bg-gradient-to-br from-blue-500/20 to-purple-500/20 rounded-full flex items-center justify-center mb-6 border border-blue-500/30">
+        <svg className="w-10 h-10 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+      </div>
+      <p className="text-white/80 font-semibold text-lg">لا توجد فيديوهات لهذه المحاضرة</p>
+      <p className="text-white/50 text-sm mt-2">ستتم إضافة الفيديوهات قريباً لهذه المحاضرة</p>
+    </div>
+  ) : (
+    <div className="space-y-2">
+      <h4 className="text-lg font-semibold text-white">فيديوهات المحاضرة</h4>
+      {videos.map((v, idx) => (
+        <button
+          key={v._id}
+          onClick={() => {
+            setSelectedVideo(v);
+            // record lecture view and specific video view when user starts a video
+            (async () => {
+              try { await lecturesAPI.viewLecture(selectedLectureId); } catch (e) {}
+              try { await videosAPI.viewVideo(v._id); } catch (e) {}
+            })();
+            try {
+              const qp = new URLSearchParams(window.location.search);
+              qp.set('lecture', selectedLectureId || chapter?.lectures?.[0]?._id || '');
+              qp.set('video', v._id);
+              const qs = qp.toString();
+              window.history.pushState(null, '', `/chapter/${chapterId}${qs ? `?${qs}` : ''}`);
+            } catch (e) {}
+          }}
+          className={`group block w-full text-right p-4 rounded-xl transition-all duration-300 border hover:bg-gradient-to-r hover:from-cyan-500/20 hover:to-blue-500/20 ${selectedVideo && String(selectedVideo._id) === String(v._id) ? 'bg-gradient-to-r from-green-600/10 to-green-400/5 border-green-400/30 ring-1 ring-green-400' : 'bg-gradient-to-r from-gray-700/30 to-gray-800/30 border-white/10 hover:border-cyan-500/50'}`}
+          aria-current={selectedVideo && String(selectedVideo._id) === String(v._id) ? 'true' : undefined}
+        >
+          <div className="flex items-center gap-4 h-auto sm:h-14">
+            <div className="flex-shrink-0 w-12 h-12 bg-cyan-600/20 border border-cyan-600/30 rounded-lg flex items-center justify-center group-hover:scale-105 transition-transform">
+              <PlayCircleIcon className="w-6 h-6 text-cyan-300" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="flex-1 min-w-0">
+                  <h4 className={`font-semibold whitespace-normal break-words ${selectedVideo && String(selectedVideo._id) === String(v._id) ? 'text-green-300' : 'text-white group-hover:text-cyan-300'} transition-colors`}>
+                    {idx + 1}. {v.title}
+                  </h4>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="mt-2 sm:mt-0 px-2 py-1 bg-cyan-500/20 text-cyan-300 text-xs rounded font-medium flex-shrink-0">فيديو</span>
+                  {selectedVideo && String(selectedVideo._id) === String(v._id) && (
+                    <span className="mt-2 sm:mt-0 px-2 py-1 bg-green-500/20 text-green-300 text-xs rounded font-semibold flex-shrink-0">مشغّل</span>
+                  )}
+                </div>
+              </div>
+            </div>
+            <div className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+              <div className={`p-2 rounded-lg ${selectedVideo && String(selectedVideo._id) === String(v._id) ? 'bg-green-500/10' : 'bg-cyan-500/10'}`}>
+                <svg className="w-5 h-5 text-cyan-300" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M8 5v14l11-7z" />
+                </svg>
+              </div>
+            </div>
+          </div>
+        </button>
+      ))}
+    </div>
+  )}
+</div>
+
 
                           {/* PDFs section (independent) */}
                           {pdfs.length === 0 ? (

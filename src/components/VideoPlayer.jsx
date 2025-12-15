@@ -114,16 +114,19 @@ export default function VideoPlayer({ video }) {
   useEffect(() => {
     if (!video || !video.qualities || video.qualities.length === 0) return;
     const qualities = [...video.qualities].map(q => String(q.quality));
-    // Choose sensible default based on viewport width to avoid unnecessary high-res traffic
-    const w = (typeof window !== 'undefined' && window.innerWidth) ? window.innerWidth : 1024;
-    let preferred = null;
-    if (w >= 1200 && qualities.includes('720')) preferred = '720';
-    else if (w >= 768 && qualities.includes('480')) preferred = '480';
-    else if (qualities.includes('360')) preferred = '360';
-    if (!preferred) {
-      const sorted = qualities.sort((a, b) => parseInt(a || '0') - parseInt(b || '0'));
-      preferred = sorted[0];
-    }
+    // If the user has a saved preferred quality for this video, use it.
+    // Otherwise (first time) default to the lowest available quality to save bandwidth.
+    try {
+      const saved = localStorage.getItem(`video-default-quality-${video._id}`);
+      if (saved && qualities.includes(String(saved))) {
+        setCurrentQuality(String(saved));
+        return;
+      }
+    } catch (e) { /* ignore localStorage errors */ }
+
+    // choose lowest available (numeric ascending)
+    const sorted = qualities.sort((a, b) => parseInt(a || '0') - parseInt(b || '0'));
+    const preferred = sorted[0] || qualities[0];
     setCurrentQuality(preferred);
   }, [video]);
 
@@ -692,6 +695,14 @@ export default function VideoPlayer({ video }) {
 
   const handleQualityChange = (q) => setCurrentQuality(q);
 
+  // persist user's explicit quality choice per-video so future opens respect it
+  const handleQualityChangePersist = (q) => {
+    try {
+      localStorage.setItem(`video-default-quality-${video._id}`, String(q));
+    } catch (e) { }
+    setCurrentQuality(q);
+  };
+
   // Apply a chosen quality to hls (lock level) and update video element sizing
   const applyQualityToHls = (hls, quality) => {
     if (!hls || !hls.levels || !quality) return;
@@ -1012,9 +1023,7 @@ export default function VideoPlayer({ video }) {
   // auth
   const { user, isLoggedIn } = useAuth();
 
-  // download state
-  const [downloading, setDownloading] = useState(false);
-  const [downloadProgress, setDownloadProgress] = useState(0);
+  // download state removed: simple browser-managed download (no floating UI)
 
   
 
@@ -1169,79 +1178,8 @@ export default function VideoPlayer({ video }) {
               if ((!duration || duration === 0) && d && d > 0) setDuration(d);
               setLoading(false);
             } catch (err) { }
-          }}
-          onError={() => setError('Playback failed')}
-            onClick={(e) => { e.stopPropagation(); togglePlayPause(); }}
-            className={`w-full h-full bg-black ${isFullscreen ? '' : ''}`}
-          style={{
-            willChange: 'transform',
-            transform: 'translateZ(0)',
-            backfaceVisibility: 'hidden',
-            perspective: 1000,
-            // تحسين الأداء على الهواتف
-            WebkitTransform: 'translateZ(0)',
-            WebkitBackfaceVisibility: 'hidden',
-            WebkitPerspective: 1000,
-            // منع التأخير في التحميل
-            WebkitPlaysInline: true,
-            playsInline: true,
-            // تحسين التقديم على iOS
-            WebkitTapHighlightColor: 'transparent'
-          }}
-        >
-          {/* Add default subtitles track if provided by server (no new controls) */}
-          {video && video.captions && video.captions.length > 0 && (
-            <track
-              kind="subtitles"
-              src={video.captions[0].src}
-              srcLang={video.captions[0].lang || 'ar'}
-              label={video.captions[0].label || (video.captions[0].lang || 'ar')}
-              default
-            />
-          )}
+          }}>
         </video>
-
-        {loading && (
-          <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-black/80 to-gray-900/80 backdrop-blur-sm">
-            <div className="relative">
-              <div className="animate-spin w-16 h-16 border-4 border-transparent border-t-red-600 border-r-red-600 rounded-full shadow-lg" />
-              <div className="absolute inset-0 flex items-center justify-center">
-                <div className="w-8 h-8 border-4 border-transparent border-b-white/30 border-l-white/30 rounded-full animate-spin" style={{ animationDirection: 'reverse' }} />
-              </div>
-            </div>
-          </div>
-        )}
-
-        {isFullscreen && (
-          <button
-            onClick={(e) => { e.stopPropagation(); toggleFullscreen(); }}
-            className="absolute top-4 right-4 z-60 bg-black/60 text-white p-2 rounded-full shadow-lg focus:outline-none sm:top-6 sm:right-6"
-            aria-label="خروج من ملء الشاشة"
-          >
-            <Icons.FullscreenExit />
-          </button>
-        )}
-
-        {/* تحسين: إضافة ردود فعل مرئية */}
-        {seekFeedback.visible && (
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-50">
-            <div className={`text-4xl font-bold p-6 rounded-full bg-black/70 backdrop-blur-sm 
-              ${seekFeedback.type === 'forward' ? 'text-green-400' : 'text-yellow-400'}`}>
-              {seekFeedback.time}
-            </div>
-          </div>
-        )}
-
-        {rateFeedback.visible && (
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-50">
-            <div className="text-3xl font-bold p-5 rounded-full bg-black/70 backdrop-blur-sm text-cyan-400">
-              {rateFeedback.rate.toFixed(2)}x
-            </div>
-          </div>
-        )}
-
-        {/* Overlay controls removed - controls are rendered below the video */}
-
         {error && (
           <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-black/90 to-gray-900/90 backdrop-blur-md">
             <div className="text-center p-8 bg-gradient-to-br from-gray-900 to-black rounded-2xl max-w-sm border border-white/10 shadow-2xl">
@@ -1416,7 +1354,7 @@ export default function VideoPlayer({ video }) {
               {qualityMenuOpen && video && video.qualities && (
                 <div className="absolute bottom-12 right-0 bg-gradient-to-b from-gray-900 to-black border border-white/10 rounded-xl shadow-2xl py-2 z-50 w-52 backdrop-blur-lg max-h-60 overflow-y-auto" onClick={(e) => e.stopPropagation()}>
                   {[...video.qualities].sort((a, b) => parseInt(a.quality) - parseInt(b.quality)).map(q => (
-                    <button key={q.quality} onClick={(e) => { e.stopPropagation(); handleQualityChange(q.quality); setQualityMenuOpen(false); }} className={`w-full text-right px-5 py-3 text-sm ${String(q.quality) === String(currentQuality) ? 'bg-gradient-to-r from-red-600 to-red-800 text-white font-semibold' : 'text-white/80'}`}>
+                    <button key={q.quality} onClick={(e) => { e.stopPropagation(); handleQualityChangePersist(q.quality); setQualityMenuOpen(false); }} className={`w-full text-right px-5 py-3 text-sm ${String(q.quality) === String(currentQuality) ? 'bg-gradient-to-r from-red-600 to-red-800 text-white font-semibold' : 'text-white/80'}`}>
                       <span>{q.quality}p</span>
                     </button>
                   ))}
@@ -1472,7 +1410,7 @@ export default function VideoPlayer({ video }) {
             {/* Download button: admin and subscribers can download chosen quality */}
             <div className="relative">
               <button
-                onClick={async (e) => {
+                onClick={(e) => {
                   e.stopPropagation();
                   // only allow if admin or user explicitly allowed to download
                   if (!(user?.isAdmin || user?.canDownloadVideos)) {
@@ -1484,61 +1422,20 @@ export default function VideoPlayer({ video }) {
                     return;
                   }
                   try {
-                    setDownloading(true);
-                    setDownloadProgress(0);
-
                     const userCode = (typeof window !== 'undefined') ? localStorage.getItem('userCode') : null;
-                    const playlistUrl = `/api/videos/${video._id}/playlist/${currentQuality}.m3u8${userCode ? `?userCode=${encodeURIComponent(userCode)}` : ''}`;
-                    const plRes = await fetch(playlistUrl, { credentials: 'same-origin' });
-                    if (!plRes.ok) throw new Error('فشل جلب قائمة التشغيل');
-                    const txt = await plRes.text();
-                    const lines = txt.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
-                    if (!lines.length) throw new Error('قائمة التشغيل فارغة');
-
-                    const parts = [];
-                    let idx = 0;
-                    for (const seg of lines) {
-                      idx += 1;
-                      const segUrl = seg.startsWith('http') ? seg : `${window.location.origin}${seg}`;
-                      const r = await fetch(segUrl, { credentials: 'same-origin' });
-                      if (!r.ok) throw new Error(`فشل جلب المقطع رقم ${idx}`);
-                      const ab = await r.arrayBuffer();
-                      parts.push(ab);
-                      setDownloadProgress(Math.round((idx / lines.length) * 100));
-                    }
-
-                    const total = parts.reduce((s, b) => s + b.byteLength, 0);
-                    const tmp = new Uint8Array(total);
-                    let off = 0;
-                    for (const b of parts) {
-                      tmp.set(new Uint8Array(b), off);
-                      off += b.byteLength;
-                    }
-
-                    const blob = new Blob([tmp], { type: 'video/MP2T' });
-                    const safeTitle = (video && video.title) ? video.title.replace(/[^a-z0-9\-_. ]/gi, '_') : 'video';
-                    const filename = `${safeTitle}_${currentQuality}p.ts`;
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = filename;
-                    document.body.appendChild(a);
-                    a.click();
-                    a.remove();
-                    URL.revokeObjectURL(url);
+                    const downloadUrl = `/api/videos/${video._id}/download?quality=${encodeURIComponent(currentQuality)}${userCode ? `&userCode=${encodeURIComponent(userCode)}` : ''}`;
+                    // open in new tab so browser manages the download (won't be cancelled by refresh)
+                    try { window.open(downloadUrl, '_blank'); } catch (e) { window.location.href = downloadUrl; }
                   } catch (err) {
                     console.error(err);
-                    setError('فشل التحميل: ' + (err.message || 'خطأ غير معروف'));
-                  } finally {
-                    setDownloading(false);
-                    setDownloadProgress(0);
+                    setError('فشل بدء التحميل');
                   }
                 }}
                 className={`flex items-center gap-2 rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-2 py-1 shadow-lg border border-white/10 min-w-[36px] h-8 sm:min-w-[44px] sm:h-10 ${(!isLoggedIn && !user?.isAdmin) ? 'opacity-50 cursor-not-allowed' : ''}`}
                 aria-label="تحميل الفيديو"
               >
                 <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 3V15" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/><path d="M8 11L12 15L16 11" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/><path d="M21 21H3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                <span className="font-medium">{downloading ? `${downloadProgress}%` : 'تحميل'}</span>
+                <span className="font-medium">تحميل</span>
               </button>
             </div>
           </div>
