@@ -224,6 +224,37 @@ export default function VideoPlayer({ video }) {
           // Network frag load errors: exponential backoff with per-frag cap
           if (data && data.type === Hls.ErrorTypes.NETWORK_ERROR && data.details && data.details.indexOf('fragLoad') === 0) {
             const url = data?.response?.url || data?.frag?.url;
+            // If server responded with 401/403 for a fragment, attempt to get a fresh short-lived token
+            const status = data?.response?.status;
+            if ((status === 401 || status === 403) && url && video && video._id) {
+              try {
+                const m = url.match(/\/segments\/(\d+)\/(\d+)/);
+                if (m) {
+                  const qFromUrl = m[1];
+                  const segNum = m[2];
+                  // ask backend to sign a new token for this specific segment
+                  videosAPI.signSegment(video._id, qFromUrl, segNum).then((res) => {
+                    try {
+                      const newToken = res && res.data && res.data.token;
+                      if (newToken) {
+                        let newUrl = url;
+                        if (/token=/.test(newUrl)) {
+                          newUrl = newUrl.replace(/([?&])token=[^&]*/, `$1token=${encodeURIComponent(newToken)}`);
+                        } else {
+                          const sep = newUrl.includes('?') ? '&' : '?';
+                          newUrl = `${newUrl}${sep}token=${encodeURIComponent(newToken)}`;
+                        }
+                        if (data && data.frag) data.frag.url = newUrl;
+                        try { showActionFeedback(Icons.PlayArrow, 'تم تحديث صلاحية المقطع'); } catch (e) { }
+                        setTimeout(() => { try { hls.startLoad(); } catch (e) { } }, 200);
+                        return;
+                      }
+                    } catch (e) { }
+                  }).catch(() => { /* ignore and fall back to retry logic below */ });
+                }
+              } catch (err) { }
+            }
+
             if (url) {
               fragRetriesRef.current[url] = (fragRetriesRef.current[url] || 0) + 1;
               const retries = fragRetriesRef.current[url];
@@ -558,7 +589,7 @@ export default function VideoPlayer({ video }) {
       const v = videoRef.current;
       if (e.code === 'Space') {
         e.preventDefault();
-        if (v.paused) safePlay(); else v.pause();
+        if (v.paused) { safePlay(); try { showActionFeedback(Icons.PlayArrow, 'تشغيل'); } catch(e){} } else { v.pause(); try { showActionFeedback(Icons.PauseCircle, 'إيقاف'); } catch(e){} }
         setShowControls(true);
         setTimeout(() => {
           if (!v.paused && !isTouchDevice) setShowControls(false);
@@ -567,10 +598,22 @@ export default function VideoPlayer({ video }) {
         v.currentTime = Math.min(v.duration || 0, v.currentTime + 5);
         setCurrentTime(v.currentTime);
         setShowControls(true);
+        try { showActionFeedback(Icons.Forward10, '+5s'); } catch (e) {}
       } else if (e.code === 'ArrowLeft') {
         v.currentTime = Math.max(0, v.currentTime - 5);
         setCurrentTime(v.currentTime);
         setShowControls(true);
+        try { showActionFeedback(Icons.Replay10, '-5s'); } catch (e) {}
+      } else if (e.code === 'ArrowUp') {
+        e.preventDefault();
+        const nv = Math.min(1, Math.round((v.volume + 0.05) * 100) / 100);
+        v.volume = nv; setVolume(nv);
+        try { showActionFeedback(Icons.VolumeHigh, `الصوت ${Math.round(nv*100)}%`); } catch (e) {}
+      } else if (e.code === 'ArrowDown') {
+        e.preventDefault();
+        const nv = Math.max(0, Math.round((v.volume - 0.05) * 100) / 100);
+        v.volume = nv; setVolume(nv);
+        try { showActionFeedback(nv === 0 ? Icons.VolumeOff : Icons.VolumeLow, `الصوت ${Math.round(nv*100)}%`); } catch (e) {}
       } else if (e.code === 'KeyF') {
         toggleFullscreen();
       } else if (e.code === 'KeyM') {
@@ -1005,6 +1048,17 @@ export default function VideoPlayer({ video }) {
   const [seekFeedback, setSeekFeedback] = useState({ visible: false, type: '', time: '' });
   const [rateFeedback, setRateFeedback] = useState({ visible: false, rate: 1 });
 
+  const [actionFeedback, setActionFeedback] = useState({ visible: false, icon: null, text: '' });
+
+  const showActionFeedback = (icon, text, timeout = 800) => {
+    setActionFeedback({ visible: true, icon, text });
+    setTimeout(() => setActionFeedback({ visible: false, icon: null, text: '' }), timeout);
+  };
+
+  const [hoverProgress, setHoverProgress] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(null); // percent 0-100 or null for indeterminate
+
   const showSeekFeedback = (type) => {
     const time = type === 'forward' ? '+10s' : '-10s';
     setSeekFeedback({ visible: true, type, time });
@@ -1180,6 +1234,36 @@ export default function VideoPlayer({ video }) {
             } catch (err) { }
           }}>
         </video>
+        {/* Exit fullscreen visible button when in fullscreen */}
+        {isFullscreen && (
+          <button onClick={(e) => { e.stopPropagation(); toggleFullscreen(); }} aria-label="خروج من ملء الشاشة" className="absolute top-4 right-4 z-50 bg-black/60 text-white p-2 rounded-md shadow-lg">
+            <Icons.FullscreenExit />
+          </button>
+        )}
+        {/* Overlay feedback for keyboard shortcuts and touch feedback */}
+        {(actionFeedback.visible || seekFeedback.visible || rateFeedback.visible) && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-40">
+            <div className="flex flex-col items-center gap-2 bg-black/40 text-white/95 px-4 py-3 rounded-xl backdrop-blur-sm">
+              <div className="text-3xl">
+                {actionFeedback.visible && actionFeedback.icon ? actionFeedback.icon() : null}
+                {!actionFeedback.visible && seekFeedback.visible ? (seekFeedback.type === 'forward' ? <Icons.Forward10 /> : <Icons.Replay10 />) : null}
+                {!actionFeedback.visible && rateFeedback.visible ? <div className="text-2xl font-semibold">{rateFeedback.rate}x</div> : null}
+              </div>
+              <div className="text-sm font-medium">{actionFeedback.visible ? actionFeedback.text : seekFeedback.visible ? seekFeedback.time : (rateFeedback.visible ? `${rateFeedback.rate}x` : '')}</div>
+            </div>
+          </div>
+        )}
+        {/* Download progress pill */}
+        {isDownloading && (
+          <div className="absolute left-4 bottom-4 z-40 pointer-events-none">
+            <div className="bg-black/70 text-white px-3 py-2 rounded-lg shadow-lg">
+              <div className="flex items-center gap-3">
+                <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path></svg>
+                <div className="text-sm">{downloadProgress != null ? `جاري التحميل — ${downloadProgress}%` : 'جاري التحميل...'}</div>
+              </div>
+            </div>
+          </div>
+        )}
         {error && (
           <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-black/90 to-gray-900/90 backdrop-blur-md">
             <div className="text-center p-8 bg-gradient-to-br from-gray-900 to-black rounded-2xl max-w-sm border border-white/10 shadow-2xl">
@@ -1213,6 +1297,8 @@ export default function VideoPlayer({ video }) {
               aria-valuemax={duration || 0}
               aria-valuenow={currentTime}
               tabIndex={0}
+              onMouseEnter={() => setHoverProgress(true)}
+              onMouseLeave={() => setHoverProgress(false)}
               onKeyDown={(e) => {
                 if (!duration || !videoRef.current) return;
                 if (e.key === 'ArrowRight') {
@@ -1253,7 +1339,7 @@ export default function VideoPlayer({ video }) {
               />
 
               <div
-                className="absolute top-0 h-full rounded-full relative shadow-lg bg-gradient-to-r from-red-500 via-red-600 to-red-700"
+                className={`absolute top-0 h-full rounded-full relative shadow-lg ${hoverProgress ? 'bg-gradient-to-r from-cyan-400 via-cyan-500 to-cyan-600' : 'bg-gradient-to-r from-red-500 via-red-600 to-red-700'}`}
                 style={(() => {
                   const rtl = isProgressRtl();
                   const w = `${(currentTime / (duration || 1)) * 100 || 0}%`;
@@ -1262,7 +1348,7 @@ export default function VideoPlayer({ video }) {
               />
 
               <div
-                className={`absolute top-1/2 -translate-y-1/2 cursor-pointer transition duration-150 rounded-full bg-white border-3 border-red-600 shadow-xl active:scale-125`}
+                className={`absolute top-1/2 -translate-y-1/2 cursor-pointer transition duration-150 rounded-full bg-white border-3 ${hoverProgress ? 'border-cyan-400' : 'border-red-600'} shadow-xl active:scale-125`}
                 style={(() => {
                   const rtl = isProgressRtl();
                   const pct = `${progressPct}%`;
@@ -1410,33 +1496,83 @@ export default function VideoPlayer({ video }) {
             {/* Download button: admin and subscribers can download chosen quality */}
             <div className="relative">
               <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  // only allow if admin or user explicitly allowed to download
-                  if (!(user?.isAdmin || user?.canDownloadVideos)) {
-                    setError('فقط المشرفين والمستخدمين المسموح لهم يمكنهم التحميل');
-                    return;
-                  }
-                  if (!currentQuality) {
-                    setError('اختر جودة أولاً');
-                    return;
-                  }
-                  try {
-                    const userCode = (typeof window !== 'undefined') ? localStorage.getItem('userCode') : null;
-                    const downloadUrl = `/api/videos/${video._id}/download?quality=${encodeURIComponent(currentQuality)}${userCode ? `&userCode=${encodeURIComponent(userCode)}` : ''}`;
-                    // open in new tab so browser manages the download (won't be cancelled by refresh)
-                    try { window.open(downloadUrl, '_blank'); } catch (e) { window.location.href = downloadUrl; }
-                  } catch (err) {
-                    console.error(err);
-                    setError('فشل بدء التحميل');
-                  }
-                }}
-                className={`flex items-center gap-2 rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-2 py-1 shadow-lg border border-white/10 min-w-[36px] h-8 sm:min-w-[44px] sm:h-10 ${(!isLoggedIn && !user?.isAdmin) ? 'opacity-50 cursor-not-allowed' : ''}`}
-                aria-label="تحميل الفيديو"
-              >
-                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 3V15" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/><path d="M8 11L12 15L16 11" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/><path d="M21 21H3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                <span className="font-medium">تحميل</span>
-              </button>
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    if (isDownloading) return;
+                    // only allow if admin or user explicitly allowed to download
+                    if (!(user?.isAdmin || user?.canDownloadVideos)) {
+                      setError('فقط المشرفين والمستخدمين المسموح لهم يمكنهم التحميل');
+                      return;
+                    }
+                    if (!currentQuality) {
+                      setError('اختر جودة أولاً');
+                      return;
+                    }
+                    try {
+                      const userCode = (typeof window !== 'undefined') ? localStorage.getItem('userCode') : null;
+                      const downloadUrl = `/api/videos/${video._id}/download?quality=${encodeURIComponent(currentQuality)}${userCode ? `&userCode=${encodeURIComponent(userCode)}` : ''}`;
+                      setIsDownloading(true);
+                      setDownloadProgress(null);
+                      try {
+                        const res = await api.get(downloadUrl, {
+                          responseType: 'blob',
+                          onDownloadProgress: (ev) => {
+                            try {
+                              if (ev && ev.lengthComputable) {
+                                const pct = Math.round((ev.loaded / ev.total) * 100);
+                                setDownloadProgress(pct);
+                              }
+                            } catch (e) { }
+                          }
+                        });
+                        const blob = new Blob([res.data], { type: res.headers['content-type'] || 'application/octet-stream' });
+                        const url = window.URL.createObjectURL(blob);
+                        const cd = res.headers['content-disposition'] || '';
+                        let filename = `${(video && video.title) ? video.title.replace(/[^a-z0-9\-_. ]/gi, '_') : 'video'}_${currentQuality}p.ts`;
+                        const m = cd.match(/filename\*=UTF-8''([^;\n\r]+)/);
+                        if (m && m[1]) filename = decodeURIComponent(m[1]);
+                        else {
+                          const m2 = cd.match(/filename="?([^";]+)"?/);
+                          if (m2 && m2[1]) filename = m2[1];
+                        }
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = filename;
+                        document.body.appendChild(a);
+                        a.click();
+                        a.remove();
+                        setTimeout(() => window.URL.revokeObjectURL(url), 10000);
+                        try { showActionFeedback(Icons.PlayArrow, 'تم التحميل'); } catch (e) { }
+                      } catch (err) {
+                        console.error('download error', err && err.response ? err.response.status : err);
+                        const msg = err?.response?.data?.message || 'فشل التحميل';
+                        setError(msg);
+                      } finally {
+                        setIsDownloading(false);
+                        setTimeout(() => setDownloadProgress(null), 800);
+                      }
+                    } catch (err) {
+                      console.error(err);
+                      setError('فشل بدء التحميل');
+                      setIsDownloading(false);
+                    }
+                  }}
+                  className={`flex items-center gap-2 rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-2 py-1 shadow-lg border border-white/10 min-w-[36px] h-8 sm:min-w-[44px] sm:h-10 ${(!isLoggedIn && !user?.isAdmin) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  aria-label="تحميل الفيديو"
+                  disabled={isDownloading}
+                >
+                  {isDownloading ? (
+                    <>
+                      <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path></svg>
+                      <span className="font-medium">{downloadProgress != null ? `تحميل ${downloadProgress}%` : 'جاري التحميل...'}</span>
+                    </>
+                  ) : (
+                    <>
+                      <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 3V15" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/><path d="M8 11L12 15L16 11" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/><path d="M21 21H3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                      <span className="font-medium">تحميل</span>
+                    </>
+                  )}
+                </button>
             </div>
           </div>
         </div>
