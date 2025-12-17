@@ -160,7 +160,16 @@ export const lecturesAPI = {
   getLectureById: (id) => api.get(`/api/lectures/${id}`),
   viewLecture: (id) => api.post(`/api/lectures/${id}/view`),
   updateLecture: (id, title, thumbnailUrl, order) =>
-    api.put(`/api/lectures/${id}`, { title, thumbnailUrl, order }),
+    // support File upload for thumbnail when updating a lecture
+    (thumbnailUrl && typeof File !== 'undefined' && thumbnailUrl instanceof File)
+      ? (() => {
+          const fd = new FormData();
+          fd.append('thumbnail', thumbnailUrl);
+          fd.append('title', title);
+          fd.append('order', order ?? 0);
+          return api.put(`/api/lectures/${id}`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+        })()
+      : api.put(`/api/lectures/${id}`, { title, thumbnailUrl, order }),
   deleteLecture: (id) => api.delete(`/api/lectures/${id}`),
   // Admin-only: get list of users who viewed this lecture
   getLectureViewers: (id) => api.get(`/api/lectures/${id}/viewers`),

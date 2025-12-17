@@ -18,14 +18,16 @@ export default function VideoPlayer({ video }) {
   const [volume, setVolume] = useState(1);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [showControls, setShowControls] = useState(true);
+  const [showControls, setShowControls] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [bufferedPercent, setBufferedPercent] = useState(0);
   const [qualityMenuOpen, setQualityMenuOpen] = useState(false);
   const [speedMenuOpen, setSpeedMenuOpen] = useState(false);
+  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const qualityRef = useRef(null);
   const speedRef = useRef(null);
+  const settingsRef = useRef(null);
   const controlsRef = useRef(null);
   const progressRef = useRef(null);
   const [manifestParsed, setManifestParsed] = useState(false);
@@ -54,7 +56,23 @@ export default function VideoPlayer({ video }) {
   const prevRateRef = useRef(null);
   const prevVolumeRef = useRef(null);
   const touchHideTimeoutRef = useRef(null);
+  const hideControlsTimeoutRef = useRef(null);
   const lastRenderedTimeRef = useRef(0);
+  const clearHideControls = () => {
+    if (hideControlsTimeoutRef.current) {
+      clearTimeout(hideControlsTimeoutRef.current);
+      hideControlsTimeoutRef.current = null;
+    }
+  };
+
+  const scheduleHideControls = (delay = 3000) => {
+    clearHideControls();
+    if (isTouchDevice) return;
+    if (qualityMenuOpen || speedMenuOpen) return;
+    hideControlsTimeoutRef.current = setTimeout(() => {
+      if (!videoRef.current?.paused) setShowControls(false);
+    }, delay);
+  };
   // separate ref to store last touch/tap info (avoid clobbering lastRenderedTimeRef)
   const lastTouchInfoRef = useRef({});
 
@@ -373,20 +391,22 @@ export default function VideoPlayer({ video }) {
     } catch (e) { }
 
     // التحكم في إظهار/إخفاء عناصر التحكم
-    const hideControlsTimeout = setTimeout(() => {
-      if (!isTouchDevice) {
+    if (!isTouchDevice) {
+      hideControlsTimeoutRef.current = setTimeout(() => {
         setShowControls(false);
-      }
-    }, 3000);
-
-    const handleMouseMove = () => {
-      setShowControls(true);
-      clearTimeout(hideControlsTimeout);
-      setTimeout(() => {
-        if (!videoRef.current?.paused && !isTouchDevice) {
-          setShowControls(false);
-        }
       }, 3000);
+    }
+
+    const handleContainerClick = (e) => {
+      // show controls on single click (do not toggle playback here)
+      setShowControls(true);
+      if (hideControlsTimeoutRef.current) {
+        clearTimeout(hideControlsTimeoutRef.current);
+        hideControlsTimeoutRef.current = null;
+      }
+      if (!videoRef.current?.paused && !isTouchDevice) {
+        hideControlsTimeoutRef.current = setTimeout(() => setShowControls(false), 3000);
+      }
     };
 
     // تحسين: معالجة اللمس بمزيد من الدقة
@@ -435,6 +455,7 @@ export default function VideoPlayer({ video }) {
               setCurrentTime(videoRef.current.currentTime);
               showSeekFeedback('backward');
             }
+            doubleTapHandledRef.current = true;
           }
           setLastTapTime(0);
           return;
@@ -528,9 +549,11 @@ export default function VideoPlayer({ video }) {
 
     const container = videoRef.current?.parentElement;
     if (container) {
-      container.addEventListener('mousemove', handleMouseMove);
+      container.addEventListener('click', handleContainerClick);
       if (isTouchDevice) {
+        container.addEventListener('touchstart', handleTouchStart, { passive: false });
         container.addEventListener('touchmove', handleTouchMove, { passive: true });
+        container.addEventListener('touchend', handleTouchEnd);
       }
     }
 
@@ -546,7 +569,10 @@ export default function VideoPlayer({ video }) {
       }
       clearInterval(saveInt);
       clearInterval(timeInterval);
-      clearTimeout(hideControlsTimeout);
+      if (hideControlsTimeoutRef.current) {
+        clearTimeout(hideControlsTimeoutRef.current);
+        hideControlsTimeoutRef.current = null;
+      }
       if (touchHideTimeoutRef.current) {
         clearTimeout(touchHideTimeoutRef.current);
         touchHideTimeoutRef.current = null;
@@ -558,8 +584,10 @@ export default function VideoPlayer({ video }) {
       if (touchControlsTimeout.current) clearTimeout(touchControlsTimeout.current);
       if (tapTimeout.current) clearTimeout(tapTimeout.current);
       if (container) {
-        container.removeEventListener('mousemove', handleMouseMove);
-        container.removeEventListener('touchmove', handleTouchMove);
+        container.removeEventListener('click', handleContainerClick);
+        try { container.removeEventListener('touchstart', handleTouchStart); } catch (e) {}
+        try { container.removeEventListener('touchmove', handleTouchMove); } catch (e) {}
+        try { container.removeEventListener('touchend', handleTouchEnd); } catch (e) {}
       }
       videoRef.current?.removeEventListener('timeupdate', updateTime);
     };
@@ -615,9 +643,22 @@ export default function VideoPlayer({ video }) {
         v.volume = nv; setVolume(nv);
         try { showActionFeedback(nv === 0 ? Icons.VolumeOff : Icons.VolumeLow, `الصوت ${Math.round(nv*100)}%`); } catch (e) {}
       } else if (e.code === 'KeyF') {
-        toggleFullscreen();
-      } else if (e.code === 'KeyM') {
-        setVolume(v.volume === 0 ? 1 : 0);
+          toggleFullscreen();
+        } else if (e.code === 'KeyM') {
+          try {
+            // remember previous non-zero volume
+            if (v.volume > 0) {
+              prevVolumeRef.current = v.volume;
+              setVolume(0);
+              v.volume = 0;
+              try { showActionFeedback(Icons.VolumeOff, 'كتم'); } catch (e) {}
+            } else {
+              const restore = (prevVolumeRef.current != null && prevVolumeRef.current > 0) ? prevVolumeRef.current : 1;
+              setVolume(restore);
+              v.volume = restore;
+              try { showActionFeedback(Icons.VolumeHigh, `الصوت ${Math.round(restore*100)}%`); } catch (e) {}
+            }
+          } catch (err) { setVolume(v.volume === 0 ? 1 : 0); }
       } else if (e.key === '>' || e.key === '.') {
         // Increase rate by 0.05 (Shift+.) emits '>' on many layouts
         increaseRate();
@@ -632,9 +673,16 @@ export default function VideoPlayer({ video }) {
 
     // Fullscreen change listener (needed on all devices)
     const handleFullscreenChange = () => {
-      setIsFullscreen(!!document.fullscreenElement);
-      if (!document.fullscreenElement) {
+      const isFs = !!document.fullscreenElement;
+      setIsFullscreen(isFs);
+      // ensure controls are visible in fullscreen
+      setShowControls(true);
+      setShowTouchControls(true);
+      clearHideControls();
+      if (!isFs) {
         setTimeout(updateVideoSizing, 100);
+        // schedule hide after exiting fullscreen
+        scheduleHideControls(3000);
       }
     };
     document.addEventListener('fullscreenchange', handleFullscreenChange);
@@ -699,15 +747,18 @@ export default function VideoPlayer({ video }) {
       if (speedMenuOpen && speedRef.current && !speedRef.current.contains(e.target)) {
         setSpeedMenuOpen(false);
       }
+      if (settingsMenuOpen && settingsRef.current && !settingsRef.current.contains(e.target)) {
+        setSettingsMenuOpen(false);
+      }
     };
-    const onEsc = (e) => { if (e.key === 'Escape') { setQualityMenuOpen(false); setSpeedMenuOpen(false); } };
+    const onEsc = (e) => { if (e.key === 'Escape') { setQualityMenuOpen(false); setSpeedMenuOpen(false); setSettingsMenuOpen(false); } };
     document.addEventListener('click', onDocClick);
     document.addEventListener('keydown', onEsc);
     return () => {
       document.removeEventListener('click', onDocClick);
       document.removeEventListener('keydown', onEsc);
     };
-  }, [qualityMenuOpen, speedMenuOpen]);
+  }, [qualityMenuOpen, speedMenuOpen, settingsMenuOpen]);
 
   // keep controls visible while menus are open on touch devices
   useEffect(() => {
@@ -1204,15 +1255,15 @@ export default function VideoPlayer({ video }) {
   };
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-2 relative">
       <div
         className={`relative w-full bg-gradient-to-br from-gray-900 to-black rounded-xl overflow-hidden 
           ${isFullscreen ? 'fixed inset-0 z-50 rounded-none' : 'aspect-video max-h-[70vh] shadow-lg'}`}
         ref={containerRef}
-        onMouseEnter={() => setShowControls(true)}
         onMouseLeave={() => {
           if (!videoRef.current?.paused && !isTouchDevice) {
-            setTimeout(() => setShowControls(false), 3000);
+            if (hideControlsTimeoutRef.current) clearTimeout(hideControlsTimeoutRef.current);
+            hideControlsTimeoutRef.current = setTimeout(() => setShowControls(false), 3000);
           }
         }}
         
@@ -1234,6 +1285,19 @@ export default function VideoPlayer({ video }) {
             } catch (err) { }
           }}>
         </video>
+        {/* Centered spinner while loading */}
+        {loading && (
+          <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/50">
+            <div className="flex flex-col items-center gap-2">
+              <svg className="w-12 h-12 text-white animate-spin" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+              </svg>
+              <div className="text-white/90 text-sm">جارٍ التحميل...</div>
+            </div>
+            
+          </div>
+        )}
         {/* Exit fullscreen visible button when in fullscreen */}
         {isFullscreen && (
           <button onClick={(e) => { e.stopPropagation(); toggleFullscreen(); }} aria-label="خروج من ملء الشاشة" className="absolute top-4 right-4 z-50 bg-black/60 text-white p-2 rounded-md shadow-lg">
@@ -1264,6 +1328,13 @@ export default function VideoPlayer({ video }) {
             </div>
           </div>
         )}
+        {isDownloading && downloadProgress != null && (
+          <div className="absolute left-1/2 -translate-x-1/2 bottom-4 z-40 pointer-events-none w-2/5">
+            <div className="w-full h-2 bg-white/20 rounded-full overflow-hidden shadow-inner">
+              <div className="h-full bg-cyan-500 transition-all" style={{ width: `${downloadProgress}%` }} />
+            </div>
+          </div>
+        )}
         {error && (
           <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-black/90 to-gray-900/90 backdrop-blur-md">
             <div className="text-center p-8 bg-gradient-to-br from-gray-900 to-black rounded-2xl max-w-sm border border-white/10 shadow-2xl">
@@ -1282,7 +1353,13 @@ export default function VideoPlayer({ video }) {
       </div>
 
       {/* شريط التقدم تحت الفيديو مع الوقت الحالي والكلي */}
-      <div className="w-full px-2 mt-2">
+      <div
+        className={`absolute left-0 right-0 bottom-16 px-2 transition-opacity duration-200 ${((showControls || showTouchControls) ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none')}`}
+        onMouseEnter={() => { setShowControls(true); clearHideControls(); }}
+        onMouseLeave={() => { scheduleHideControls(3000); }}
+        onFocus={() => { setShowControls(true); clearHideControls(); }}
+        onBlur={() => { scheduleHideControls(3000); }}
+      >
         <div className="flex items-center gap-3">
           <div className="text-white/90 font-medium text-sm">
             <span className="bg-black/30 px-2 py-1 rounded-md">{formatTime(currentTime)}</span>
@@ -1359,35 +1436,30 @@ export default function VideoPlayer({ video }) {
               />
             </div>
           </div>
+          <div className="flex items-center gap-2 w-auto sm:w-auto justify-end">
+            <button onClick={(e) => { e.stopPropagation(); toggleFullscreen(); }} className="flex items-center justify-center rounded-full bg-gradient-to-br from-gray-900/80 to-black/80 text-white min-w-[36px] h-8 sm:min-w-[44px] sm:h-11 sm:w-10 shadow-lg" aria-label={isFullscreen ? 'خروج من ملء الشاشة' : 'ملء الشاشة'}>
+              {isFullscreen ? <Icons.FullscreenExit /> : <Icons.Fullscreen />}
+            </button>
+          </div>
         </div>
       </div>
 
       {/* عناصر التحكم النهائية خارج إطار الفيديو */}
-      <div className="w-full px-2 mt-3">
-        <div className="flex flex-col sm:flex-row items-center sm:justify-between gap-2 sm:gap-3">
-          <div className="flex items-center gap-2 sm:gap-3 flex-wrap w-full sm:w-auto justify-center sm:justify-start">
-            <button
-              onClick={(e) => { e.stopPropagation(); if (videoRef.current) { videoRef.current.currentTime = Math.max(0, videoRef.current.currentTime - 10); setCurrentTime(videoRef.current.currentTime); showSeekFeedback('backward'); } }}
-              className="flex items-center justify-center rounded-full bg-gradient-to-br from-gray-900/80 to-black/80 min-w-[36px] h-8 sm:min-w-[44px] sm:h-11 sm:w-10 text-white shadow-lg active:scale-95"
-              aria-label="رجوع 10 ثواني"
-            >
-              <Icons.Replay10 />
-            </button>
-
+      <div
+        className={`absolute left-0 right-0 bottom-4 px-2 transition-opacity duration-200 ${((showControls || showTouchControls) ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none')}`}
+        onMouseEnter={() => { setShowControls(true); clearHideControls(); }}
+        onMouseLeave={() => { scheduleHideControls(3000); }}
+        onFocus={() => { setShowControls(true); clearHideControls(); }}
+        onBlur={() => { scheduleHideControls(3000); }}
+      >
+        <div className="flex flex-row items-center justify-between gap-2 sm:gap-3">
+          <div className="flex items-center gap-2 sm:gap-3 flex-wrap w-full sm:w-auto justify-start">
             <button
               onClick={(e) => { e.stopPropagation(); togglePlayPause(); }}
               className="flex items-center justify-center rounded-full bg-gradient-to-br from-gray-900 to-black min-w-[44px] h-9 sm:min-w-[56px] sm:h-12 sm:w-14 text-white shadow-2xl active:scale-95"
               aria-label={isPlaying ? 'إيقاف' : 'تشغيل'}
             >
               {isPlaying ? <Icons.Pause /> : <Icons.Play />}
-            </button>
-
-            <button
-              onClick={(e) => { e.stopPropagation(); if (videoRef.current) { videoRef.current.currentTime = Math.min(videoRef.current.duration || 0, videoRef.current.currentTime + 10); setCurrentTime(videoRef.current.currentTime); showSeekFeedback('forward'); } }}
-              className="flex items-center justify-center rounded-full bg-gradient-to-br from-gray-900/80 to-black/80 min-w-[36px] h-8 sm:min-w-[44px] sm:h-11 sm:w-10 text-white shadow-lg active:scale-95"
-              aria-label="تقديم 10 ثواني"
-            >
-              <Icons.Forward10 />
             </button>
 
             <button
@@ -1421,12 +1493,11 @@ export default function VideoPlayer({ video }) {
                 if (v > 0) prevVolumeRef.current = v;
                 setVolume(v);
               }}
-              className="w-16 sm:w-28 ml-2 accent-red-600"
+              className="hidden sm:block w-16 sm:w-28 ml-2 accent-red-600"
               aria-label="مستوى الصوت"
             />
-          </div>
-          <div className="flex items-center gap-2 flex-wrap w-full sm:w-auto justify-center sm:justify-end">
-            <div className="relative" ref={qualityRef} onClick={(e) => e.stopPropagation()}>
+
+            <div className="relative hidden sm:block" ref={qualityRef} onClick={(e) => e.stopPropagation()}>
               <button
                 onClick={(e) => { e.stopPropagation(); setQualityMenuOpen((s) => !s); setSpeedMenuOpen(false); }}
                 className="flex items-center gap-2 rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-2 py-1 shadow-lg border border-white/10 min-w-[36px] h-8 sm:min-w-[44px] sm:h-10"
@@ -1448,7 +1519,7 @@ export default function VideoPlayer({ video }) {
               )}
             </div>
 
-            <div className="relative" ref={speedRef} onClick={(e) => e.stopPropagation()}>
+            <div className="relative hidden sm:block" ref={speedRef} onClick={(e) => e.stopPropagation()}>
               <button
                 onClick={(e) => { e.stopPropagation(); setSpeedMenuOpen((s) => !s); setQualityMenuOpen(false); }}
                 className="flex items-center gap-2 rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-2 py-1 shadow-lg border border-white/10 min-w-[36px] h-8 sm:min-w-[44px] sm:h-10"
@@ -1489,12 +1560,32 @@ export default function VideoPlayer({ video }) {
               )}
             </div>
 
-            <button onClick={(e) => { e.stopPropagation(); toggleFullscreen(); }} className="flex items-center justify-center rounded-full bg-gradient-to-br from-gray-900/80 to-black/80 text-white min-w-[36px] h-8 sm:min-w-[44px] sm:h-11 sm:w-10 shadow-lg" aria-label={isFullscreen ? 'خروج من ملء الشاشة' : 'ملء الشاشة'}>
-              {isFullscreen ? <Icons.FullscreenExit /> : <Icons.Fullscreen />}
-            </button>
-            
+            {/* Settings for small screens */}
+            <div className="relative sm:hidden" ref={settingsRef} onClick={(e) => e.stopPropagation()}>
+              <button onClick={(e) => { e.stopPropagation(); setSettingsMenuOpen((s) => !s); setQualityMenuOpen(false); setSpeedMenuOpen(false); }} className="flex items-center justify-center rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-2 py-1 shadow-lg border border-white/10 min-w-[36px] h-8">
+                <Icons.Settings />
+              </button>
+              {settingsMenuOpen && (
+                <div className="absolute bottom-12 right-0 bg-gradient-to-b from-gray-900 to-black border border-white/10 rounded-xl shadow-2xl py-2 z-50 w-56 backdrop-blur-lg">
+                  <div className="px-3 py-2 text-sm text-white/80">الجودة</div>
+                  {video && video.qualities && [...video.qualities].sort((a,b)=>parseInt(a.quality)-parseInt(b.quality)).map(q=> (
+                    <button key={q.quality} onClick={(e)=>{e.stopPropagation(); handleQualityChangePersist(q.quality); setSettingsMenuOpen(false);}} className={`w-full text-right px-5 py-2 text-sm ${String(q.quality)===String(currentQuality)?'bg-gradient-to-r from-red-600 to-red-800 text-white font-semibold':'text-white/80'}`}>
+                      {q.quality}p
+                    </button>
+                  ))}
+                  <div className="px-3 py-2 text-sm text-white/80">السرعة</div>
+                  <div className="px-3 py-2">
+                    <input type="range" min="0.25" max="3" step="0.05" value={playbackRate} onChange={(e)=>{ const v = Math.round(parseFloat(e.target.value)*100)/100; setPlaybackRate(v); showRateFeedback(v);}} className="w-full accent-red-600" />
+                  </div>
+                  <div className="px-3 py-2">
+                    <button onClick={(e)=>{ e.stopPropagation(); const d = document.querySelector('[aria-label="تحميل الفيديو"]'); if(d) d.click(); setSettingsMenuOpen(false); }} className="w-full text-left px-4 py-2 text-sm bg-black/20 rounded">تحميل</button>
+                  </div>
+                </div>
+              )}
+            </div>
+
             {/* Download button: admin and subscribers can download chosen quality */}
-            <div className="relative">
+            <div className="relative hidden sm:block">
               <button
                   onClick={async (e) => {
                     e.stopPropagation();
@@ -1518,9 +1609,13 @@ export default function VideoPlayer({ video }) {
                           responseType: 'blob',
                           onDownloadProgress: (ev) => {
                             try {
-                              if (ev && ev.lengthComputable) {
-                                const pct = Math.round((ev.loaded / ev.total) * 100);
+                              const loaded = ev.loaded || 0;
+                              const total = ev.total || 0;
+                              if (total > 0) {
+                                const pct = Math.round((loaded / total) * 100);
                                 setDownloadProgress(pct);
+                              } else {
+                                setDownloadProgress(null);
                               }
                             } catch (e) { }
                           }

@@ -6,6 +6,7 @@ import MaterialsPage from './pages/user/MaterialsPage';
 import InstructorsPage from './pages/user/InstructorsPage';
 import InstructorDetailsPage from './pages/user/InstructorDetailsPage';
 import ChapterLecturesPage from './pages/user/ChapterLecturesPage';
+import LectureContentPage from './pages/user/LectureContentPage';
 import AdminLayout from './layouts/AdminLayout';
 
 // Lazy load admin pages
@@ -100,6 +101,14 @@ export const router = createBrowserRouter([
     element: (
       <ProtectedRoute>
         <ChapterLecturesPage />
+      </ProtectedRoute>
+    ),
+  },
+  {
+    path: '/chapter/:chapterId/lecture/:lectureId',
+    element: (
+      <ProtectedRoute>
+        <LectureContentPage />
       </ProtectedRoute>
     ),
   },
