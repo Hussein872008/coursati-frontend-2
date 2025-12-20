@@ -49,6 +49,12 @@ export default defineConfig(({ command, mode }) => ({
     include: [
       'react',
       'react-dom'
+    ],
+    // Prevent server-only packages (and Babel parser) from being pre-bundled into the client build
+    exclude: [
+      '@babel/parser',
+      'workbox-build',
+      '@rollup/plugin-babel'
     ]
   },
   server: {
