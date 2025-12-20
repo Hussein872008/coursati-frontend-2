@@ -45,6 +45,12 @@ export default defineConfig(({ command, mode }) => ({
       }
     })
   ],
+  optimizeDeps: {
+    include: [
+      'react',
+      'react-dom'
+    ]
+  },
   server: {
     port: 3000,
     proxy: {
