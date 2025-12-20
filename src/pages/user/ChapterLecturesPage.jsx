@@ -1,18 +1,24 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { useNavigate, useParams, Link } from 'react-router-dom';
-import { useAuth } from '../../hooks/useAuth';
-import { chapterAPI, pdfsAPI, videosAPI, lecturesAPI, materialAPI } from '../../utils/api';
-import UserHeader from '../../components/user/UserHeader';
-import UserFooter from '../../components/user/UserFooter';
-import VideoPlayer from '../../components/VideoPlayer';
+import React, { useState, useEffect, useCallback, useMemo } from "react";
+import { useNavigate, useParams, Link } from "react-router-dom";
+import { useAuth } from "../../hooks/useAuth";
+import {
+  chapterAPI,
+  pdfsAPI,
+  videosAPI,
+  lecturesAPI,
+  materialAPI,
+} from "../../utils/api";
+import UserHeader from "../../components/user/UserHeader";
+import UserFooter from "../../components/user/UserFooter";
+import VideoPlayer from "../../components/VideoPlayer";
 import {
   BookOpenIcon,
   ClockIcon,
   PlayCircleIcon,
   DocumentTextIcon,
-  AcademicCapIcon
-} from '@heroicons/react/24/outline';
-import useTitle from '../../hooks/useTitle';
+  AcademicCapIcon,
+} from "@heroicons/react/24/outline";
+import useTitle from "../../hooks/useTitle";
 
 const API_BASE = import.meta.env.VITE_API_BASE;
 
@@ -22,7 +28,7 @@ const ChapterLecturesPage = () => {
   const { user } = useAuth();
   const [chapter, setChapter] = useState(null);
   const [material, setMaterial] = useState(null);
-  useTitle('كورساتي —  محتوي الفصل');
+  useTitle("كورساتي —  محتوي الفصل");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedLectureId, setSelectedLectureId] = useState(null);
@@ -57,13 +63,18 @@ const ChapterLecturesPage = () => {
         }
         try {
           const qp = new URLSearchParams(window.location.search);
-          const l = routeLectureId || qp.get('lecture');
+          const l = routeLectureId || qp.get("lecture");
           if (l) {
             setSelectedLectureId(l);
-          } else if (response.data?.lectures && response.data.lectures.length > 0) {
+          } else if (
+            response.data?.lectures &&
+            response.data.lectures.length > 0
+          ) {
             // choose the most recent lecture by createdAt as default
             try {
-              const sorted = (response.data.lectures || []).slice().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+              const sorted = (response.data.lectures || [])
+                .slice()
+                .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
               if (sorted.length > 0) setSelectedLectureId(sorted[0]._id);
             } catch (e) {
               setSelectedLectureId(response.data.lectures[0]._id);
@@ -93,8 +104,14 @@ const ChapterLecturesPage = () => {
       if (!selectedLectureId) return;
       try {
         setPdfsLoading(true);
-        const lectureFromChapter = chapter?.lectures?.find((l) => l._id === selectedLectureId);
-        if (lectureFromChapter && Array.isArray(lectureFromChapter.pdfs) && lectureFromChapter.pdfs.length > 0) {
+        const lectureFromChapter = chapter?.lectures?.find(
+          (l) => l._id === selectedLectureId,
+        );
+        if (
+          lectureFromChapter &&
+          Array.isArray(lectureFromChapter.pdfs) &&
+          lectureFromChapter.pdfs.length > 0
+        ) {
           setPdfs(lectureFromChapter.pdfs);
         } else {
           const pdfsRes = await pdfsAPI.getPDFsByLecture(selectedLectureId);
@@ -117,24 +134,38 @@ const ChapterLecturesPage = () => {
       if (!selectedLectureId) return;
       try {
         setVideosLoading(true);
-        const lectureFromChapter = chapter?.lectures?.find((l) => l._id === selectedLectureId);
-        if (lectureFromChapter && Array.isArray(lectureFromChapter.videos) && lectureFromChapter.videos.length > 0) {
+        const lectureFromChapter = chapter?.lectures?.find(
+          (l) => l._id === selectedLectureId,
+        );
+        if (
+          lectureFromChapter &&
+          Array.isArray(lectureFromChapter.videos) &&
+          lectureFromChapter.videos.length > 0
+        ) {
           setVideos(lectureFromChapter.videos);
         } else {
           const res = await videosAPI.getVideosByLecture(selectedLectureId);
-          console.debug('videosAPI.getVideosByLecture response for', selectedLectureId, res && res.data);
+          console.debug(
+            "videosAPI.getVideosByLecture response for",
+            selectedLectureId,
+            res && res.data,
+          );
           const vids = res.data || [];
           setVideos(vids);
 
           try {
             const qp = new URLSearchParams(window.location.search);
-            const v = qp.get('video');
+            const v = qp.get("video");
             if (v) {
               const found = vids.find((x) => String(x._id) === String(v));
               if (found) {
                 setSelectedVideo(found);
-                try { await lecturesAPI.viewLecture(selectedLectureId); } catch (e) {}
-                try { await videosAPI.viewVideo(found._id); } catch (e) {}
+                try {
+                  await lecturesAPI.viewLecture(selectedLectureId);
+                } catch (e) {}
+                try {
+                  await videosAPI.viewVideo(found._id);
+                } catch (e) {}
               }
             }
           } catch (e) {}
@@ -153,7 +184,10 @@ const ChapterLecturesPage = () => {
     if (selectedVideo && playerRef.current) {
       setTimeout(() => {
         try {
-          playerRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          playerRef.current.scrollIntoView({
+            behavior: "smooth",
+            block: "center",
+          });
         } catch (e) {}
       }, 80);
     }
@@ -164,36 +198,41 @@ const ChapterLecturesPage = () => {
     if (!selectedLectureId) return;
     try {
       const el = document.getElementById(`lecture-${selectedLectureId}`);
-      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
     } catch (e) {}
   }, [selectedLectureId]);
 
   // تسجيل عرض PDF
   const handlePDFView = useCallback(async (pdfId) => {
     try {
-      const userCode = localStorage.getItem('userCode');
+      const userCode = localStorage.getItem("userCode");
       const url = `${API_BASE}/api/pdfs/${pdfId}/view`;
 
       if (userCode) {
         fetch(url, {
-          method: 'POST',
-          headers: { 
-            'user-code': userCode,
-            'Content-Type': 'application/json'
+          method: "POST",
+          headers: {
+            "user-code": userCode,
+            "Content-Type": "application/json",
           },
           keepalive: true,
-          body: JSON.stringify({ timestamp: new Date().toISOString() })
+          body: JSON.stringify({ timestamp: new Date().toISOString() }),
         }).catch(() => {});
       } else if (navigator.sendBeacon) {
-        const data = new Blob([JSON.stringify({
-          anonymous: true,
-          timestamp: new Date().toISOString()
-        })], { type: 'application/json' });
+        const data = new Blob(
+          [
+            JSON.stringify({
+              anonymous: true,
+              timestamp: new Date().toISOString(),
+            }),
+          ],
+          { type: "application/json" },
+        );
         navigator.sendBeacon(url, data);
       } else {
         fetch(url, {
-          method: 'POST',
-          keepalive: true
+          method: "POST",
+          keepalive: true,
         }).catch(() => {});
       }
     } catch (err) {
@@ -201,21 +240,22 @@ const ChapterLecturesPage = () => {
     }
   }, []);
 
-
   const getLectureIcon = (lecture) => {
-    if (lecture.pdfs?.length > 0) return <DocumentTextIcon className="w-4 h-4 text-purple-400" />;
+    if (lecture.pdfs?.length > 0)
+      return <DocumentTextIcon className="w-4 h-4 text-purple-400" />;
     return <BookOpenIcon className="w-4 h-4 text-emerald-400" />;
   };
 
   // format seconds to H:MM:SS or M:SS
   const formatTime = (seconds) => {
-    if (seconds == null || isNaN(seconds)) return '0:00';
+    if (seconds == null || isNaN(seconds)) return "0:00";
     const sec = Math.floor(seconds);
     const hrs = Math.floor(sec / 3600);
     const mins = Math.floor((sec % 3600) / 60);
     const secs = sec % 60;
-    if (hrs > 0) return `${hrs}:${mins < 10 ? '0' : ''}${mins}:${secs < 10 ? '0' : ''}${secs}`;
-    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
+    if (hrs > 0)
+      return `${hrs}:${mins < 10 ? "0" : ""}${mins}:${secs < 10 ? "0" : ""}${secs}`;
+    return `${mins}:${secs < 10 ? "0" : ""}${secs}`;
   };
 
   const lectureTotalSeconds = (lecture) => {
@@ -234,13 +274,18 @@ const ChapterLecturesPage = () => {
 
   const chapterTotalVideos = () => {
     if (!chapter || !Array.isArray(chapter.lectures)) return 0;
-    return chapter.lectures.reduce((sum, l) => sum + (Array.isArray(l.videos) ? l.videos.length : 0), 0);
+    return chapter.lectures.reduce(
+      (sum, l) => sum + (Array.isArray(l.videos) ? l.videos.length : 0),
+      0,
+    );
   };
 
   const sortedLectures = useMemo(() => {
     if (!chapter || !Array.isArray(chapter.lectures)) return [];
     try {
-      return [...chapter.lectures].slice().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+      return [...chapter.lectures]
+        .slice()
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     } catch (e) {
       return chapter.lectures;
     }
@@ -294,8 +339,18 @@ const ChapterLecturesPage = () => {
           <div className="mb-8 p-4 border border-red-500/30 rounded-2xl backdrop-blur-sm">
             <div className="flex items-center gap-3">
               <div className="p-2 bg-red-500/20 rounded-lg">
-                <svg className="w-5 h-5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                <svg
+                  className="w-5 h-5 text-red-400"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                  />
                 </svg>
               </div>
               <div>
@@ -319,20 +374,32 @@ const ChapterLecturesPage = () => {
                         {/* breadcrumb / small metadata with links */}
                         <div className="text-xs text-white/50 mb-2">
                           {material?.title ? (
-                            <Link to={`/material/${material._id}`} className="text-white/60 hover:underline">{material.title}</Link>
+                            <Link
+                              to={`/material/${material._id}`}
+                              className="text-white/60 hover:underline"
+                            >
+                              {material.title}
+                            </Link>
                           ) : (
                             <span className="text-white/60">المادة</span>
                           )}
                           <span className="mx-2">/</span>
                           {chapter?.instructorId?._id ? (
-                            <Link to={`/instructor/${chapter.instructorId._id}`} className="text-white/60 hover:underline">{chapter.instructorId.title}</Link>
+                            <Link
+                              to={`/instructor/${chapter.instructorId._id}`}
+                              className="text-white/60 hover:underline"
+                            >
+                              {chapter.instructorId.title}
+                            </Link>
                           ) : (
                             <span className="text-white/60">المدرّس</span>
                           )}
                         </div>
 
                         {/* chapter title */}
-                        <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold text-white leading-tight">{chapter.title}</h1>
+                        <h1 className="text-2xl sm:text-3xl md:text-4xl font-bold text-white leading-tight">
+                          {chapter.title}
+                        </h1>
 
                         {/* compact stats under title */}
                         <div className="mt-3 flex flex-wrap items-center gap-4 text-sm text-white/70">
@@ -350,7 +417,6 @@ const ChapterLecturesPage = () => {
                           </div>
                         </div>
                       </div>
-
                     </div>
                   </div>
                 </div>
@@ -367,7 +433,9 @@ const ChapterLecturesPage = () => {
             <div className="bg-gradient-to-br from-gray-800/40 to-gray-900/40 backdrop-blur-xl border border-white/10 rounded-2xl p-4">
               <div className="flex items-center justify-between mb-2">
                 <div>
-                  <h3 className="text-lg font-semibold text-white">تشغيل الفيديو</h3>
+                  <h3 className="text-lg font-semibold text-white">
+                    تشغيل الفيديو
+                  </h3>
                   <p className="text-sm text-white/60">{selectedVideo.title}</p>
                 </div>
                 <div>
@@ -375,11 +443,15 @@ const ChapterLecturesPage = () => {
                     onClick={() => {
                       setSelectedVideo(null);
                       try {
-                        navigate(`/chapter/${chapterId}${selectedLectureId ? `/lecture/${selectedLectureId}` : ''}`);
+                        navigate(
+                          `/chapter/${chapterId}${selectedLectureId ? `/lecture/${selectedLectureId}` : ""}`,
+                        );
                       } catch (e) {}
                     }}
                     className="px-3 py-1 bg-white/10 text-white rounded-lg hover:bg-white/20"
-                  >إغلاق المشغل</button>
+                  >
+                    إغلاق المشغل
+                  </button>
                 </div>
               </div>
               <div>
@@ -389,7 +461,7 @@ const ChapterLecturesPage = () => {
           </div>
         )}
 
-          <div className="grid grid-cols-1 gap-8">
+        <div className="grid grid-cols-1 gap-8">
           {/* قائمة المحاضرات */}
           <div>
             <div className="bg-gradient-to-br from-gray-800/40 to-gray-900/40 backdrop-blur-xl border border-white/10 rounded-2xl p-4 md:p-6">
@@ -401,7 +473,7 @@ const ChapterLecturesPage = () => {
               </div>
 
               <div className="pr-2">
-                {(!chapter?.lectures || chapter.lectures.length === 0) ? (
+                {!chapter?.lectures || chapter.lectures.length === 0 ? (
                   <div className="text-center py-8">
                     <BookOpenIcon className="w-12 h-12 text-white/30 mx-auto mb-3" />
                     <p className="text-white/60">لا توجد محاضرات بعد</p>
@@ -410,7 +482,11 @@ const ChapterLecturesPage = () => {
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 p-1">
                     {sortedLectures.map((lecture, index) => {
                       const secs = lectureTotalSeconds(lecture);
-                      const imgSrc = lecture.thumbnailUrl || lecture.thumbnail || chapter.thumbnailUrl || '';
+                      const imgSrc =
+                        lecture.thumbnailUrl ||
+                        lecture.thumbnail ||
+                        chapter.thumbnailUrl ||
+                        "";
                       return (
                         <button
                           id={`lecture-${lecture._id}`}
@@ -418,43 +494,75 @@ const ChapterLecturesPage = () => {
                           onClick={() => {
                             setSelectedLectureId(lecture._id);
                             setSelectedVideo(null);
-                            try { navigate(`/chapter/${chapterId}/lecture/${lecture._id}`); } catch (e) {}
-                            if (typeof window !== 'undefined' && window.innerWidth && window.innerWidth < 768) {
+                            try {
+                              navigate(
+                                `/chapter/${chapterId}/lecture/${lecture._id}`,
+                              );
+                            } catch (e) {}
+                            if (
+                              typeof window !== "undefined" &&
+                              window.innerWidth &&
+                              window.innerWidth < 768
+                            ) {
                               setTimeout(() => {
-                                const el = document.getElementById('lecture-content');
-                                if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                                const el =
+                                  document.getElementById("lecture-content");
+                                if (el)
+                                  el.scrollIntoView({
+                                    behavior: "smooth",
+                                    block: "start",
+                                  });
                               }, 120);
                             }
                           }}
                           className={`w-full text-right rounded-2xl transition-all duration-300 overflow-hidden border ${
                             selectedLectureId === lecture._id
-                              ? 'bg-gradient-to-r from-purple-500/20 to-blue-500/20 border-purple-500/30'
-                              : 'bg-white/5 border-white/10 hover:border-white/20'
+                              ? "bg-gradient-to-r from-purple-500/20 to-blue-500/20 border-purple-500/30"
+                              : "bg-white/5 border-white/10 hover:border-white/20"
                           }`}
                         >
                           <div className="relative">
                             <div className="w-full h-40 bg-white/5">
                               {imgSrc ? (
-                                <img src={imgSrc} alt={lecture.title} className="w-full h-40 object-cover" />
+                                <img
+                                  src={imgSrc}
+                                  alt={lecture.title}
+                                  className="w-full h-40 object-cover"
+                                />
                               ) : (
                                 <div className="w-full h-40 flex items-center justify-center bg-white/5">
                                   {getLectureIcon(lecture)}
                                 </div>
                               )}
                             </div>
-                            <div className="absolute top-2 right-2 bg-black/40 text-white text-xs px-2 py-0.5 rounded-full">{index + 1}</div>
+                            <div className="absolute top-2 right-2 bg-black/40 text-white text-xs px-2 py-0.5 rounded-full">
+                              {index + 1}
+                            </div>
                           </div>
                           <div className="p-3">
-                            <div className="font-medium text-white line-clamp-2">{lecture.title}</div>
-                            <div className="text-xs text-white/60 mt-2">{secs > 0 ? `مدة الفيديوهات: ${formatTime(secs)}` : ''}</div>
+                            <div className="font-medium text-white line-clamp-2">
+                              {lecture.title}
+                            </div>
+                            <div className="text-xs text-white/60 mt-2">
+                              {secs > 0
+                                ? `مدة الفيديوهات: ${formatTime(secs)}`
+                                : ""}
+                            </div>
                             <div className="flex items-center justify-between mt-3">
                               <div className="flex items-center gap-3 text-xs text-white/70">
                                 <PlayCircleIcon className="w-4 h-4 text-cyan-300" />
-                                <span>{(lecture.videos && lecture.videos.length) || 0} فيديو</span>
+                                <span>
+                                  {(lecture.videos && lecture.videos.length) ||
+                                    0}{" "}
+                                  فيديو
+                                </span>
                               </div>
                               <div className="flex items-center gap-3 text-xs text-white/70">
                                 <DocumentTextIcon className="w-4 h-4 text-purple-300" />
-                                <span>{(lecture.pdfs && lecture.pdfs.length) || 0} ملف</span>
+                                <span>
+                                  {(lecture.pdfs && lecture.pdfs.length) || 0}{" "}
+                                  ملف
+                                </span>
                               </div>
                             </div>
                           </div>
@@ -463,11 +571,11 @@ const ChapterLecturesPage = () => {
                     })}
                   </div>
                 )}
-                </div>
               </div>
             </div>
           </div>
         </div>
+      </div>
 
       {/* فوتر */}
       <UserFooter />

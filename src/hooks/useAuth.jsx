@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useState } from "react";
 
 const AuthContext = createContext();
 
@@ -10,23 +10,25 @@ export const AuthProvider = ({ children }) => {
   // Check if subscription has expired and auto-logout
   const checkSubscriptionExpiry = (userData) => {
     if (!userData) return false;
-    if (userData.subscriptionType === 'permanent') return false;
-    const expires = userData.subscriptionExpires ? new Date(userData.subscriptionExpires) : null;
+    if (userData.subscriptionType === "permanent") return false;
+    const expires = userData.subscriptionExpires
+      ? new Date(userData.subscriptionExpires)
+      : null;
     if (!expires || isNaN(expires)) return true; // expired if no expiry date
     return expires.getTime() < Date.now(); // expired if in the past
   };
 
   useEffect(() => {
-    const userCode = localStorage.getItem('userCode');
-    const userData = localStorage.getItem('userData');
+    const userCode = localStorage.getItem("userCode");
+    const userData = localStorage.getItem("userData");
 
     if (userCode && userData) {
       try {
         const parsedUser = JSON.parse(userData);
         // Check if subscription has expired
         if (checkSubscriptionExpiry(parsedUser)) {
-          localStorage.removeItem('userCode');
-          localStorage.removeItem('userData');
+          localStorage.removeItem("userCode");
+          localStorage.removeItem("userData");
           setUser(null);
           setIsLoggedIn(false);
         } else {
@@ -35,23 +37,23 @@ export const AuthProvider = ({ children }) => {
         }
       } catch (e) {
         // parsing user data failed (silenced in production)
-        localStorage.removeItem('userCode');
-        localStorage.removeItem('userData');
+        localStorage.removeItem("userCode");
+        localStorage.removeItem("userData");
       }
     }
     setLoading(false);
   }, []);
 
   const login = (userData, userCode) => {
-    localStorage.setItem('userCode', userCode);
-    localStorage.setItem('userData', JSON.stringify(userData));
+    localStorage.setItem("userCode", userCode);
+    localStorage.setItem("userData", JSON.stringify(userData));
     setUser(userData);
     setIsLoggedIn(true);
   };
 
   const logout = () => {
-    localStorage.removeItem('userCode');
-    localStorage.removeItem('userData');
+    localStorage.removeItem("userCode");
+    localStorage.removeItem("userData");
     setUser(null);
     setIsLoggedIn(false);
   };
@@ -63,7 +65,7 @@ export const AuthProvider = ({ children }) => {
     const interval = setInterval(() => {
       if (checkSubscriptionExpiry(user)) {
         logout();
-        window.location.href = '/login?expired=1';
+        window.location.href = "/login?expired=1";
       }
     }, 30000); // check every 30 seconds
 
@@ -80,7 +82,7 @@ export const AuthProvider = ({ children }) => {
 export const useAuth = () => {
   const context = useContext(AuthContext);
   if (!context) {
-    throw new Error('useAuth must be used within AuthProvider');
+    throw new Error("useAuth must be used within AuthProvider");
   }
   return context;
 };

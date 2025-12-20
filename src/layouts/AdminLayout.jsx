@@ -1,7 +1,7 @@
-import React from 'react';
-import { Outlet } from 'react-router-dom';
-import { useAuth } from '../hooks/useAuth';
-import AdminHeader from '../components/admin/AdminHeader';
+import React from "react";
+import { Outlet } from "react-router-dom";
+import { useAuth } from "../hooks/useAuth";
+import AdminHeader from "../components/admin/AdminHeader";
 
 const AdminLayout = () => {
   const { logout } = useAuth();

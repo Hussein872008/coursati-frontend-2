@@ -17,7 +17,7 @@ export const isNumericId = (id) => {
  * @returns {boolean}
  */
 export const isValidId = (id) => {
-  if (!id || typeof id !== 'string') return false;
+  if (!id || typeof id !== "string") return false;
   const isNumeric = /^\d+$/.test(id);
   const isMongoHex = /^[a-fA-F0-9]{24}$/.test(id);
   return isNumeric || isMongoHex;
@@ -55,9 +55,9 @@ export const validateAllNumericIds = (params, paramNames) => {
 export const createAdminPath = (basePath, ...ids) => {
   const validIds = ids.filter((id) => Number.isInteger(id) && id > 0);
   if (validIds.length !== ids.length) {
-    throw new Error('All IDs must be positive integers');
+    throw new Error("All IDs must be positive integers");
   }
-  return `${basePath}/${validIds.join('/')}`;
+  return `${basePath}/${validIds.join("/")}`;
 };
 
 /**
@@ -68,16 +68,16 @@ export const createAdminPath = (basePath, ...ids) => {
 export const extractNumericIds = (params) => {
   const ids = [];
   const keys = Object.keys(params).sort();
-  
+
   for (const key of keys) {
-    if (key.includes('Id')) {
+    if (key.includes("Id")) {
       const id = parseNumericId(params[key]);
       if (id !== null) {
         ids.push(id);
       }
     }
   }
-  
+
   return ids;
 };
 

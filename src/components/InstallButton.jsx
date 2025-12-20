@@ -1,11 +1,11 @@
-import React from 'react'
-import useInstallPrompt from '../hooks/useInstallPrompt'
-import { ArrowDownTrayIcon } from '@heroicons/react/24/solid'
+import React from "react";
+import useInstallPrompt from "../hooks/useInstallPrompt";
+import { ArrowDownTrayIcon } from "@heroicons/react/24/solid";
 
-export default function InstallButton({ className = '', iconOnly = false }) {
-  const { canInstall, install } = useInstallPrompt()
+export default function InstallButton({ className = "", iconOnly = false }) {
+  const { canInstall, install } = useInstallPrompt();
 
-  if (!canInstall) return null
+  if (!canInstall) return null;
 
   if (iconOnly) {
     return (
@@ -16,7 +16,7 @@ export default function InstallButton({ className = '', iconOnly = false }) {
       >
         <ArrowDownTrayIcon className="w-5 h-5" />
       </button>
-    )
+    );
   }
 
   return (
@@ -26,5 +26,5 @@ export default function InstallButton({ className = '', iconOnly = false }) {
     >
       تثبيت التطبيق
     </button>
-  )
+  );
 }

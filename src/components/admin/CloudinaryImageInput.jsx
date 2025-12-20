@@ -1,1 +1,1 @@
-export { default } from '../CloudinaryImageInput';
+export { default } from "../CloudinaryImageInput";

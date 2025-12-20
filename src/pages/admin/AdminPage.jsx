@@ -1,15 +1,22 @@
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { authAPI, materialAPI, instructorAPI, chapterAPI, lecturesAPI, pdfsAPI } from '../../utils/api';
-import { useAuth } from '../../hooks/useAuth';
-import useTitle from '../../hooks/useTitle';
-import FileUploadWidget from '../../components/FileUploadWidget';
+import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
+import {
+  authAPI,
+  materialAPI,
+  instructorAPI,
+  chapterAPI,
+  lecturesAPI,
+  pdfsAPI,
+} from "../../utils/api";
+import { useAuth } from "../../hooks/useAuth";
+import useTitle from "../../hooks/useTitle";
+import FileUploadWidget from "../../components/FileUploadWidget";
 
 const AdminPage = () => {
   const navigate = useNavigate();
   const { logout } = useAuth();
-  useTitle('كورساتي — الإدارة');
-  const [view, setView] = useState('users');
+  useTitle("كورساتي — الإدارة");
+  const [view, setView] = useState("users");
   const [users, setUsers] = useState([]);
   const [materials, setMaterials] = useState([]);
   const [selectedMaterial, setSelectedMaterial] = useState(null);
@@ -19,18 +26,18 @@ const AdminPage = () => {
   const [loading, setLoading] = useState(false);
 
   // Form states
-  const [newUserName, setNewUserName] = useState('');
-  const [newUserPhone, setNewUserPhone] = useState('');
-  const [newMaterialTitle, setNewMaterialTitle] = useState('');
-  const [newMaterialThumbnail, setNewMaterialThumbnail] = useState('');
-  const [newInstructorTitle, setNewInstructorTitle] = useState('');
-  const [newInstructorThumbnail, setNewInstructorThumbnail] = useState('');
-  const [newChapterTitle, setNewChapterTitle] = useState('');
-  const [newChapterThumbnail, setNewChapterThumbnail] = useState('');
-  const [newLectureTitle, setNewLectureTitle] = useState('');
+  const [newUserName, setNewUserName] = useState("");
+  const [newUserPhone, setNewUserPhone] = useState("");
+  const [newMaterialTitle, setNewMaterialTitle] = useState("");
+  const [newMaterialThumbnail, setNewMaterialThumbnail] = useState("");
+  const [newInstructorTitle, setNewInstructorTitle] = useState("");
+  const [newInstructorThumbnail, setNewInstructorThumbnail] = useState("");
+  const [newChapterTitle, setNewChapterTitle] = useState("");
+  const [newChapterThumbnail, setNewChapterThumbnail] = useState("");
+  const [newLectureTitle, setNewLectureTitle] = useState("");
   // Video states removed - video functionality has been removed from the project
-  const [newPdfTitle, setNewPdfTitle] = useState('');
-  const [newPdfUrl, setNewPdfUrl] = useState('');
+  const [newPdfTitle, setNewPdfTitle] = useState("");
+  const [newPdfUrl, setNewPdfUrl] = useState("");
 
   useEffect(() => {
     loadUsers();
@@ -42,7 +49,7 @@ const AdminPage = () => {
       const response = await authAPI.getAllUsers();
       setUsers(response.data);
     } catch (error) {
-      alert('خطأ في تحميل المستخدمين');
+      alert("خطأ في تحميل المستخدمين");
     }
   };
 
@@ -52,15 +59,20 @@ const AdminPage = () => {
       const materialsWithInstructors = await Promise.all(
         response.data.map(async (material) => {
           try {
-            const instructorsRes = await instructorAPI.getInstructorsByMaterial(material._id);
+            const instructorsRes = await instructorAPI.getInstructorsByMaterial(
+              material._id,
+            );
             const instructorsWithChapters = await Promise.all(
               instructorsRes.data.map(async (instructor) => {
                 try {
-                  const chaptersRes = await chapterAPI.getChaptersByInstructor(instructor._id);
+                  const chaptersRes = await chapterAPI.getChaptersByInstructor(
+                    instructor._id,
+                  );
                   const chaptersWithLectures = await Promise.all(
                     chaptersRes.data.map(async (chapter) => {
                       try {
-                        const lecturesRes = await lecturesAPI.getLecturesByChapter(chapter._id);
+                        const lecturesRes =
+                          await lecturesAPI.getLecturesByChapter(chapter._id);
                         return {
                           ...chapter,
                           lectures: lecturesRes.data || [],
@@ -71,7 +83,7 @@ const AdminPage = () => {
                           lectures: [],
                         };
                       }
-                    })
+                    }),
                   );
 
                   return {
@@ -84,7 +96,7 @@ const AdminPage = () => {
                     chapters: [],
                   };
                 }
-              })
+              }),
             );
 
             return {
@@ -97,12 +109,12 @@ const AdminPage = () => {
               instructors: [],
             };
           }
-        })
+        }),
       );
 
       setMaterials(materialsWithInstructors);
     } catch (error) {
-      alert('خطأ في تحميل المواد');
+      alert("خطأ في تحميل المواد");
     }
   };
 
@@ -110,61 +122,79 @@ const AdminPage = () => {
     e.preventDefault();
     try {
       await authAPI.createUser(newUserName, newUserPhone);
-      setNewUserName('');
-      setNewUserPhone('');
-      alert('تم إنشاء المستخدم بنجاح');
+      setNewUserName("");
+      setNewUserPhone("");
+      alert("تم إنشاء المستخدم بنجاح");
       loadUsers();
     } catch (error) {
-      alert('خطأ في إنشاء المستخدم');
+      alert("خطأ في إنشاء المستخدم");
     }
   };
 
   const createMaterial = async (e) => {
     e.preventDefault();
     try {
-      await materialAPI.createMaterial(newMaterialTitle, newMaterialThumbnail, 0);
-      setNewMaterialTitle('');
-      setNewMaterialThumbnail('');
-      alert('تم إنشاء المادة بنجاح');
+      await materialAPI.createMaterial(
+        newMaterialTitle,
+        newMaterialThumbnail,
+        0,
+      );
+      setNewMaterialTitle("");
+      setNewMaterialThumbnail("");
+      alert("تم إنشاء المادة بنجاح");
       loadMaterials();
     } catch (error) {
-      alert('خطأ في إنشاء المادة');
+      alert("خطأ في إنشاء المادة");
     }
   };
 
   const createInstructor = async (e) => {
     e.preventDefault();
     if (!selectedMaterial) {
-      alert('اختر مادة أولاً');
+      alert("اختر مادة أولاً");
       return;
     }
     try {
-      await instructorAPI.createInstructor(newInstructorTitle, selectedMaterial._id, newInstructorThumbnail, 0);
-      setNewInstructorTitle('');
-      setNewInstructorThumbnail('');
-      alert('تم إنشاء المدرس بنجاح');
-      const instructorsRes = await instructorAPI.getInstructorsByMaterial(selectedMaterial._id);
+      await instructorAPI.createInstructor(
+        newInstructorTitle,
+        selectedMaterial._id,
+        newInstructorThumbnail,
+        0,
+      );
+      setNewInstructorTitle("");
+      setNewInstructorThumbnail("");
+      alert("تم إنشاء المدرس بنجاح");
+      const instructorsRes = await instructorAPI.getInstructorsByMaterial(
+        selectedMaterial._id,
+      );
       setSelectedMaterial({
         ...selectedMaterial,
         instructors: instructorsRes.data,
       });
     } catch (error) {
-      alert('خطأ في إنشاء المدرس');
+      alert("خطأ في إنشاء المدرس");
     }
   };
 
   const createChapter = async (e) => {
     e.preventDefault();
     if (!selectedInstructor) {
-      alert('اختر مدرساً أولاً');
+      alert("اختر مدرساً أولاً");
       return;
     }
     try {
-      await chapterAPI.createChapter(newChapterTitle, selectedInstructor._id, newChapterThumbnail, 0);
-      setNewChapterTitle('');
-      setNewChapterThumbnail('');
-      alert('تم إنشاء الفصل بنجاح');
-      const chaptersRes = await chapterAPI.getChaptersByInstructor(selectedInstructor._id);
+      await chapterAPI.createChapter(
+        newChapterTitle,
+        selectedInstructor._id,
+        newChapterThumbnail,
+        0,
+      );
+      setNewChapterTitle("");
+      setNewChapterThumbnail("");
+      alert("تم إنشاء الفصل بنجاح");
+      const chaptersRes = await chapterAPI.getChaptersByInstructor(
+        selectedInstructor._id,
+      );
       const updatedInstructor = {
         ...selectedInstructor,
         chapters: chaptersRes.data,
@@ -174,26 +204,33 @@ const AdminPage = () => {
       const updatedMaterials = materials.map((mat) => ({
         ...mat,
         instructors: mat.instructors.map((inst) =>
-          inst._id === selectedInstructor._id ? updatedInstructor : inst
+          inst._id === selectedInstructor._id ? updatedInstructor : inst,
         ),
       }));
       setMaterials(updatedMaterials);
     } catch (error) {
-      alert('خطأ في إنشاء الفصل');
+      alert("خطأ في إنشاء الفصل");
     }
   };
 
   const createLecture = async (e) => {
     e.preventDefault();
     if (!selectedChapter) {
-      alert('اختر فصلاً أولاً');
+      alert("اختر فصلاً أولاً");
       return;
     }
     try {
-      await lecturesAPI.createLecture(newLectureTitle, selectedChapter._id, null, 0);
-      setNewLectureTitle('');
-      alert('تم إنشاء المحاضرة بنجاح');
-      const lecturesRes = await lecturesAPI.getLecturesByChapter(selectedChapter._id);
+      await lecturesAPI.createLecture(
+        newLectureTitle,
+        selectedChapter._id,
+        null,
+        0,
+      );
+      setNewLectureTitle("");
+      alert("تم إنشاء المحاضرة بنجاح");
+      const lecturesRes = await lecturesAPI.getLecturesByChapter(
+        selectedChapter._id,
+      );
       const updatedChapter = {
         ...selectedChapter,
         lectures: lecturesRes.data,
@@ -203,7 +240,7 @@ const AdminPage = () => {
       const updatedInstructor = {
         ...selectedInstructor,
         chapters: selectedInstructor.chapters.map((ch) =>
-          ch._id === selectedChapter._id ? updatedChapter : ch
+          ch._id === selectedChapter._id ? updatedChapter : ch,
         ),
       };
       setSelectedInstructor(updatedInstructor);
@@ -211,12 +248,12 @@ const AdminPage = () => {
       const updatedMaterials = materials.map((mat) => ({
         ...mat,
         instructors: mat.instructors.map((inst) =>
-          inst._id === selectedInstructor._id ? updatedInstructor : inst
+          inst._id === selectedInstructor._id ? updatedInstructor : inst,
         ),
       }));
       setMaterials(updatedMaterials);
     } catch (error) {
-      alert('خطأ في إنشاء المحاضرة');
+      alert("خطأ في إنشاء المحاضرة");
     }
   };
 
@@ -225,23 +262,23 @@ const AdminPage = () => {
   const createPdf = async (e) => {
     e.preventDefault();
     if (!selectedLecture) {
-      alert('اختر محاضرة أولاً');
+      alert("اختر محاضرة أولاً");
       return;
     }
     try {
       await pdfsAPI.createPDF(newPdfTitle, selectedLecture._id, newPdfUrl, 0);
-      setNewPdfTitle('');
-      setNewPdfUrl('');
-      alert('تم إضافة الملف بنجاح');
+      setNewPdfTitle("");
+      setNewPdfUrl("");
+      alert("تم إضافة الملف بنجاح");
       loadMaterials();
     } catch (error) {
-      alert('خطأ في إضافة الملف');
+      alert("خطأ في إضافة الملف");
     }
   };
 
   const handleLogout = () => {
     logout();
-    navigate('/login');
+    navigate("/login");
   };
 
   return (
@@ -261,18 +298,18 @@ const AdminPage = () => {
       <div className="max-w-7xl mx-auto p-6">
         <div className="grid grid-cols-4 gap-4 mb-6">
           {[
-            { id: 'users', label: 'المستخدمين' },
-            { id: 'materials', label: 'المواد' },
-            { id: 'structure', label: 'الهيكل' },
-            { id: 'content', label: 'المحتوى' },
+            { id: "users", label: "المستخدمين" },
+            { id: "materials", label: "المواد" },
+            { id: "structure", label: "الهيكل" },
+            { id: "content", label: "المحتوى" },
           ].map((tab) => (
             <button
               key={tab.id}
               onClick={() => setView(tab.id)}
               className={`py-2 px-4 rounded font-semibold transition ${
                 view === tab.id
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-white text-gray-800 hover:bg-gray-50'
+                  ? "bg-blue-600 text-white"
+                  : "bg-white text-gray-800 hover:bg-gray-50"
               }`}
             >
               {tab.label}
@@ -281,7 +318,7 @@ const AdminPage = () => {
         </div>
 
         {/* Users View */}
-        {view === 'users' && (
+        {view === "users" && (
           <div className="space-y-6">
             <div className="bg-white rounded-lg p-6">
               <h2 className="text-xl font-bold mb-4">إنشاء مستخدم جديد</h2>
@@ -331,7 +368,7 @@ const AdminPage = () => {
         )}
 
         {/* Materials View */}
-        {view === 'materials' && (
+        {view === "materials" && (
           <div className="space-y-6">
             <div className="bg-white rounded-lg p-6">
               <h2 className="text-xl font-bold mb-4">إنشاء مادة</h2>
@@ -346,11 +383,13 @@ const AdminPage = () => {
                 />
 
                 <div>
-                  <label className="block text-sm font-medium mb-2">صورة المادة:</label>
+                  <label className="block text-sm font-medium mb-2">
+                    صورة المادة:
+                  </label>
                   <div className="flex gap-4 items-center">
                     <FileUploadWidget
                       onSuccess={(url) => setNewMaterialThumbnail(url)}
-                      onError={(err) => alert('خطأ: ' + err)}
+                      onError={(err) => alert("خطأ: " + err)}
                     />
                     {newMaterialThumbnail && (
                       <div className="flex items-center gap-2">
@@ -361,7 +400,7 @@ const AdminPage = () => {
                         />
                         <button
                           type="button"
-                          onClick={() => setNewMaterialThumbnail('')}
+                          onClick={() => setNewMaterialThumbnail("")}
                           className="text-red-600 hover:text-red-800 text-sm"
                         >
                           ❌ إزالة
@@ -389,8 +428,8 @@ const AdminPage = () => {
                     onClick={() => setSelectedMaterial(material)}
                     className={`w-full text-right p-4 border rounded transition ${
                       selectedMaterial?._id === material._id
-                        ? 'bg-blue-100 border-blue-500'
-                        : 'hover:bg-gray-50'
+                        ? "bg-blue-100 border-blue-500"
+                        : "hover:bg-gray-50"
                     }`}
                   >
                     {material.title}
@@ -402,7 +441,7 @@ const AdminPage = () => {
         )}
 
         {/* Structure View */}
-        {view === 'structure' && (
+        {view === "structure" && (
           <div className="space-y-6">
             {/* Instructors */}
             <div className="bg-white rounded-lg p-6">
@@ -410,7 +449,7 @@ const AdminPage = () => {
               <form onSubmit={createInstructor} className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium mb-2">
-                    المادة المختارة: {selectedMaterial?.title || 'لم تختر'}
+                    المادة المختارة: {selectedMaterial?.title || "لم تختر"}
                   </label>
                 </div>
                 <input
@@ -423,11 +462,13 @@ const AdminPage = () => {
                 />
 
                 <div>
-                  <label className="block text-sm font-medium mb-2">صورة المدرس:</label>
+                  <label className="block text-sm font-medium mb-2">
+                    صورة المدرس:
+                  </label>
                   <div className="flex gap-4 items-center">
                     <FileUploadWidget
                       onSuccess={(url) => setNewInstructorThumbnail(url)}
-                      onError={(err) => alert('خطأ: ' + err)}
+                      onError={(err) => alert("خطأ: " + err)}
                     />
                     {newInstructorThumbnail && (
                       <div className="flex items-center gap-2">
@@ -438,7 +479,7 @@ const AdminPage = () => {
                         />
                         <button
                           type="button"
-                          onClick={() => setNewInstructorThumbnail('')}
+                          onClick={() => setNewInstructorThumbnail("")}
                           className="text-red-600 hover:text-red-800 text-sm"
                         >
                           ❌ إزالة
@@ -464,9 +505,9 @@ const AdminPage = () => {
                 <h2 className="text-xl font-bold mb-4">إنشاء فصل</h2>
                 <form onSubmit={createChapter} className="space-y-4">
                   <div>
-                  <label className="block text-sm font-medium mb-2">
-                    المدرس المختار: {selectedInstructor?.title || 'لم تختر'}
-                  </label>
+                    <label className="block text-sm font-medium mb-2">
+                      المدرس المختار: {selectedInstructor?.title || "لم تختر"}
+                    </label>
                   </div>
                   <input
                     type="text"
@@ -478,11 +519,13 @@ const AdminPage = () => {
                   />
 
                   <div>
-                    <label className="block text-sm font-medium mb-2">صورة الفصل:</label>
+                    <label className="block text-sm font-medium mb-2">
+                      صورة الفصل:
+                    </label>
                     <div className="flex gap-4 items-center">
                       <FileUploadWidget
                         onSuccess={(url) => setNewChapterThumbnail(url)}
-                        onError={(err) => alert('خطأ: ' + err)}
+                        onError={(err) => alert("خطأ: " + err)}
                       />
                       {newChapterThumbnail && (
                         <div className="flex items-center gap-2">
@@ -493,7 +536,7 @@ const AdminPage = () => {
                           />
                           <button
                             type="button"
-                            onClick={() => setNewChapterThumbnail('')}
+                            onClick={() => setNewChapterThumbnail("")}
                             className="text-red-600 hover:text-red-800 text-sm"
                           >
                             ❌ إزالة
@@ -521,8 +564,8 @@ const AdminPage = () => {
                         onClick={() => setSelectedInstructor(instructor)}
                         className={`w-full text-right p-4 border rounded transition ${
                           selectedInstructor?._id === instructor._id
-                            ? 'bg-blue-100 border-blue-500'
-                            : 'hover:bg-gray-50'
+                            ? "bg-blue-100 border-blue-500"
+                            : "hover:bg-gray-50"
                         }`}
                       >
                         {instructor.title}
@@ -536,7 +579,7 @@ const AdminPage = () => {
         )}
 
         {/* Content View */}
-        {view === 'content' && (
+        {view === "content" && (
           <div className="space-y-6">
             {/* Lectures */}
             {selectedChapter && (
@@ -634,8 +677,8 @@ const AdminPage = () => {
                       onClick={() => setSelectedChapter(chapter)}
                       className={`w-full text-right p-4 border rounded transition ${
                         selectedChapter?._id === chapter._id
-                          ? 'bg-blue-100 border-blue-500'
-                          : 'hover:bg-gray-50'
+                          ? "bg-blue-100 border-blue-500"
+                          : "hover:bg-gray-50"
                       }`}
                     >
                       {chapter.title}
@@ -656,8 +699,8 @@ const AdminPage = () => {
                       onClick={() => setSelectedLecture(lecture)}
                       className={`w-full text-right p-4 border rounded transition ${
                         selectedLecture?._id === lecture._id
-                          ? 'bg-blue-100 border-blue-500'
-                          : 'hover:bg-gray-50'
+                          ? "bg-blue-100 border-blue-500"
+                          : "hover:bg-gray-50"
                       }`}
                     >
                       {lecture.title}

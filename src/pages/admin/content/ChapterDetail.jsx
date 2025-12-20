@@ -1,24 +1,24 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Link, useParams, useNavigate } from 'react-router-dom';
-import { chapterAPI, lecturesAPI } from '../../../utils/api';
-import { Eye } from 'lucide-react';
-import AdminBreadcrumb from '../../../components/admin/AdminBreadcrumb';
-import CloudinaryImageInput from '../../../components/CloudinaryImageInput';
-import useTitle from '../../../hooks/useTitle';
-import { validateAllNumericIds } from '../../../utils/routeValidation';
+import React, { useState, useEffect, useRef } from "react";
+import { Link, useParams, useNavigate } from "react-router-dom";
+import { chapterAPI, lecturesAPI } from "../../../utils/api";
+import { Eye } from "lucide-react";
+import AdminBreadcrumb from "../../../components/admin/AdminBreadcrumb";
+import CloudinaryImageInput from "../../../components/CloudinaryImageInput";
+import useTitle from "../../../hooks/useTitle";
+import { validateAllNumericIds } from "../../../utils/routeValidation";
 
 const ChapterDetail = () => {
   const { materialId, instructorId, chapterId } = useParams();
   const navigate = useNavigate();
-  useTitle('كورساتي — تفاصيل الفصل');
+  useTitle("كورساتي — تفاصيل الفصل");
   const [chapter, setChapter] = useState(null);
   const [lectures, setLectures] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [formData, setFormData] = useState({ title: '', thumbnail: '' });
+  const [formData, setFormData] = useState({ title: "", thumbnail: "" });
   const [showForm, setShowForm] = useState(false);
-  const [activeTab, setActiveTab] = useState('lectures');
+  const [activeTab, setActiveTab] = useState("lectures");
   const [editMode, setEditMode] = useState(false);
-  const [editData, setEditData] = useState({ title: '', thumbnail: '' });
+  const [editData, setEditData] = useState({ title: "", thumbnail: "" });
   const [editing, setEditing] = useState(false);
   const [editSuccess, setEditSuccess] = useState(false);
   const [lectureViewersCache, setLectureViewersCache] = useState({});
@@ -27,8 +27,14 @@ const ChapterDetail = () => {
   const hideTimeoutRef = useRef(null);
 
   useEffect(() => {
-    if (!validateAllNumericIds({ materialId, instructorId, chapterId }, ['materialId', 'instructorId', 'chapterId'])) {
-      navigate('/admin/content/materials');
+    if (
+      !validateAllNumericIds({ materialId, instructorId, chapterId }, [
+        "materialId",
+        "instructorId",
+        "chapterId",
+      ])
+    ) {
+      navigate("/admin/content/materials");
       return;
     }
     loadData();
@@ -44,13 +50,13 @@ const ChapterDetail = () => {
       setChapter(ch);
 
       // initialize edit form
-      setEditData({ title: ch.title || '', thumbnail: ch.thumbnail || '' });
+      setEditData({ title: ch.title || "", thumbnail: ch.thumbnail || "" });
 
       const lecturesRes = await lecturesAPI.getLecturesByChapter(chapterId);
       setLectures(lecturesRes.data || []);
     } catch (error) {
       // Error loading data (handled by UI)
-      navigate('/admin/content/materials');
+      navigate("/admin/content/materials");
     } finally {
       setLoading(false);
     }
@@ -99,21 +105,32 @@ const ChapterDetail = () => {
   }, []);
 
   const handleDeleteChapter = async () => {
-    if (!window.confirm(`هل أنت متأكد من حذف الفصل "${chapter.title}" وجميع محاضراته؟`)) return;
+    if (
+      !window.confirm(
+        `هل أنت متأكد من حذف الفصل "${chapter.title}" وجميع محاضراته؟`,
+      )
+    )
+      return;
     try {
       await chapterAPI.deleteChapter(chapterId);
-      navigate(`/admin/content/materials/${materialId}/instructors/${instructorId}`);
+      navigate(
+        `/admin/content/materials/${materialId}/instructors/${instructorId}`,
+      );
     } catch (error) {
       // Error deleting chapter (handled by UI)
-      alert('حدث خطأ أثناء حذف الفصل');
+      alert("حدث خطأ أثناء حذف الفصل");
     }
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      await lecturesAPI.createLecture(formData.title, chapterId, formData.thumbnail || null);
-      setFormData({ title: '', thumbnail: '' });
+      await lecturesAPI.createLecture(
+        formData.title,
+        chapterId,
+        formData.thumbnail || null,
+      );
+      setFormData({ title: "", thumbnail: "" });
       setShowForm(false);
       await loadData();
     } catch (error) {
@@ -137,7 +154,10 @@ const ChapterDetail = () => {
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {[...Array(4)].map((_, i) => (
-              <div key={i} className="p-6 rounded-2xl bg-gradient-to-r from-gray-800/40 to-gray-900/40 backdrop-blur-sm border border-white/10 h-32">
+              <div
+                key={i}
+                className="p-6 rounded-2xl bg-gradient-to-r from-gray-800/40 to-gray-900/40 backdrop-blur-sm border border-white/10 h-32"
+              >
                 <div className="flex gap-6">
                   <div className="w-20 h-20 bg-white/10 rounded-xl flex-shrink-0"></div>
                   <div className="flex-1">
@@ -158,14 +178,32 @@ const ChapterDetail = () => {
       <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-purple-900 flex items-center justify-center p-6">
         <div className="text-center">
           <div className="w-24 h-24 mx-auto mb-6 rounded-full bg-gradient-to-r from-red-500/20 to-pink-500/20 flex items-center justify-center">
-            <svg className="w-12 h-12 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            <svg
+              className="w-12 h-12 text-red-400"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+              />
             </svg>
           </div>
-          <h2 className="text-2xl font-bold text-white mb-2">الفصل غير موجود</h2>
-          <p className="text-white/60 mb-6">الفصل الذي تبحث عنه غير موجود أو تم حذفه</p>
+          <h2 className="text-2xl font-bold text-white mb-2">
+            الفصل غير موجود
+          </h2>
+          <p className="text-white/60 mb-6">
+            الفصل الذي تبحث عنه غير موجود أو تم حذفه
+          </p>
           <button
-            onClick={() => navigate(`/admin/content/materials/${materialId}/instructors/${instructorId}`)}
+            onClick={() =>
+              navigate(
+                `/admin/content/materials/${materialId}/instructors/${instructorId}`,
+              )
+            }
             className="px-6 py-3 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-xl hover:shadow-lg hover:shadow-blue-500/20 transform hover:-translate-y-0.5 transition-all duration-200"
           >
             العودة إلى الفصول
@@ -176,10 +214,16 @@ const ChapterDetail = () => {
   }
 
   const breadcrumbs = [
-    { label: 'المواد', path: '/admin/content/materials' },
-    { label: 'المدرّسين', path: `/admin/content/materials/${materialId}` },
-    { label: 'الفصول', path: `/admin/content/materials/${materialId}/instructors/${instructorId}` },
-    { label: chapter.title, path: `/admin/content/materials/${materialId}/instructors/${instructorId}/chapters/${chapterId}` },
+    { label: "المواد", path: "/admin/content/materials" },
+    { label: "المدرّسين", path: `/admin/content/materials/${materialId}` },
+    {
+      label: "الفصول",
+      path: `/admin/content/materials/${materialId}/instructors/${instructorId}`,
+    },
+    {
+      label: chapter.title,
+      path: `/admin/content/materials/${materialId}/instructors/${instructorId}/chapters/${chapterId}`,
+    },
   ];
 
   return (
@@ -191,7 +235,7 @@ const ChapterDetail = () => {
       </div>
 
       <div className="relative z-10">
-        <AdminBreadcrumb items={breadcrumbs} className='mb-3 -mt-2' />
+        <AdminBreadcrumb items={breadcrumbs} className="mb-3 -mt-2" />
 
         {/* Chapter Header */}
         <div className="admin-card p-8 mb-8 bg-gradient-to-r from-gray-800/60 via-gray-900/60 to-gray-800/60 backdrop-blur-xl border border-white/10 rounded-3xl shadow-2xl">
@@ -210,7 +254,9 @@ const ChapterDetail = () => {
                 <h1 className="text-3xl font-bold bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-500 bg-clip-text text-transparent">
                   {chapter.title}
                 </h1>
-                <p className="text-white/60 text-sm mt-1">المعرف: {chapter._id.slice(0, 8)}...</p>
+                <p className="text-white/60 text-sm mt-1">
+                  المعرف: {chapter._id.slice(0, 8)}...
+                </p>
               </div>
             </div>
 
@@ -224,7 +270,9 @@ const ChapterDetail = () => {
               <div className="h-10 w-px bg-white/10"></div>
               <div className="text-center px-4">
                 <div className="text-3xl font-bold bg-gradient-to-r from-emerald-400 to-teal-400 bg-clip-text text-transparent">
-                  {typeof chapter.viewCount === 'number' ? chapter.viewCount : 0}
+                  {typeof chapter.viewCount === "number"
+                    ? chapter.viewCount
+                    : 0}
                 </div>
                 <div className="text-sm text-white/70">المشاهدات</div>
               </div>
@@ -236,45 +284,85 @@ const ChapterDetail = () => {
         <div className="admin-card p-2 mb-8 bg-gradient-to-r from-gray-800/40 to-gray-900/40 backdrop-blur-sm border border-white/10 rounded-2xl">
           <div className="flex space-x-2 rtl:space-x-reverse">
             <button
-              onClick={() => setActiveTab('lectures')}
+              onClick={() => setActiveTab("lectures")}
               className={`flex-1 px-6 py-3 rounded-xl font-semibold transition-all duration-200 flex items-center justify-center gap-2 ${
-                activeTab === 'lectures'
-                  ? 'bg-gradient-to-r from-cyan-500 to-blue-500 text-white shadow-md'
-                  : 'text-white/60 hover:bg-white/5 hover:text-white/80'
+                activeTab === "lectures"
+                  ? "bg-gradient-to-r from-cyan-500 to-blue-500 text-white shadow-md"
+                  : "text-white/60 hover:bg-white/5 hover:text-white/80"
               }`}
             >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 14l9-5-9-5-9 5 9 5z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 14l6.16-3.422A12.083 12.083 0 0118 20.5c-1.123-.44-2.27-.5-6-.5s-4.877.06-6 .5c-.38.15-.74.32-1.08.5L12 14z" />
+              <svg
+                className="w-5 h-5"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 14l9-5-9-5-9 5 9 5z"
+                />
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 14l6.16-3.422A12.083 12.083 0 0118 20.5c-1.123-.44-2.27-.5-6-.5s-4.877.06-6 .5c-.38.15-.74.32-1.08.5L12 14z"
+                />
               </svg>
               المحاضرات ({lectures.length})
             </button>
 
             <button
-              onClick={() => setActiveTab('details')}
+              onClick={() => setActiveTab("details")}
               className={`flex-1 px-6 py-3 rounded-xl font-semibold transition-all duration-200 flex items-center justify-center gap-2 ${
-                activeTab === 'details'
-                  ? 'bg-gradient-to-r from-cyan-500 to-blue-500 text-white shadow-md'
-                  : 'text-white/60 hover:bg-white/5 hover:text-white/80'
+                activeTab === "details"
+                  ? "bg-gradient-to-r from-cyan-500 to-blue-500 text-white shadow-md"
+                  : "text-white/60 hover:bg-white/5 hover:text-white/80"
               }`}
             >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 20a8 8 0 100-16 8 8 0 000 16z" />
+              <svg
+                className="w-5 h-5"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M13 16h-1v-4h-1m1-4h.01"
+                />
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 20a8 8 0 100-16 8 8 0 000 16z"
+                />
               </svg>
               التفاصيل
             </button>
 
             <button
-              onClick={() => setActiveTab('settings')}
+              onClick={() => setActiveTab("settings")}
               className={`flex-1 px-6 py-3 rounded-xl font-semibold transition-all duration-200 flex items-center justify-center gap-2 ${
-                activeTab === 'settings'
-                  ? 'bg-gradient-to-r from-cyan-500 to-blue-500 text-white shadow-md'
-                  : 'text-white/60 hover:bg-white/5 hover:text-white/80'
+                activeTab === "settings"
+                  ? "bg-gradient-to-r from-cyan-500 to-blue-500 text-white shadow-md"
+                  : "text-white/60 hover:bg-white/5 hover:text-white/80"
               }`}
             >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+              <svg
+                className="w-5 h-5"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M11.049 2.927c.3-.921 1.603-.921 1.902 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
+                />
               </svg>
               الإعدادات
             </button>
@@ -282,7 +370,7 @@ const ChapterDetail = () => {
         </div>
 
         {/* Lectures Tab */}
-        {activeTab === 'lectures' && (
+        {activeTab === "lectures" && (
           <div className="space-y-8">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               {/* Lectures Cards - New Design */}
@@ -293,10 +381,14 @@ const ChapterDetail = () => {
                   className="group relative"
                 >
                   {/* Glow Effect */}
-                  <div className={`absolute inset-0 bg-gradient-to-r from-cyan-500/10 via-blue-500/10 to-purple-500/10 rounded-2xl blur-xl transition-opacity duration-500 ${
-                    hoveredLecture === lecture._id ? 'opacity-100' : 'opacity-0'
-                  }`} />
-                  
+                  <div
+                    className={`absolute inset-0 bg-gradient-to-r from-cyan-500/10 via-blue-500/10 to-purple-500/10 rounded-2xl blur-xl transition-opacity duration-500 ${
+                      hoveredLecture === lecture._id
+                        ? "opacity-100"
+                        : "opacity-0"
+                    }`}
+                  />
+
                   <div className="relative bg-gradient-to-r from-gray-800/40 to-gray-900/40 backdrop-blur-sm border border-white/10 rounded-2xl p-6 hover:border-cyan-500/30 hover:shadow-2xl hover:shadow-cyan-500/10 transition-all duration-500">
                     <div className="flex gap-6 items-center">
                       {/* Content Left */}
@@ -305,38 +397,55 @@ const ChapterDetail = () => {
                           <span className="px-3 py-1 bg-gradient-to-r from-blue-600 to-cyan-600 text-white text-xs font-semibold rounded-full shadow">
                             محاضرة #{idx + 1}
                           </span>
-                          <span className="text-xs text-white/50">#{lecture._id.slice(0, 8)}</span>
-                          { (lecture.thumbnailUrl || lecture.thumbnail) && (
+                          <span className="text-xs text-white/50">
+                            #{lecture._id.slice(0, 8)}
+                          </span>
+                          {(lecture.thumbnailUrl || lecture.thumbnail) && (
                             <img
                               src={lecture.thumbnailUrl || lecture.thumbnail}
                               alt={lecture.title}
                               className="w-28 h-16 object-cover rounded-md ml-3 hidden sm:block"
                             />
-                          ) }
+                          )}
                         </div>
-                        
+
                         <h3 className="text-xl font-bold text-white mb-3 group-hover:text-cyan-300 transition-colors duration-300 line-clamp-2">
                           {lecture.title}
                         </h3>
-                        
+
                         <div className="space-y-2">
                           <div className="flex items-center gap-2 text-sm text-white/60">
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                            <svg
+                              className="w-4 h-4"
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"
+                              />
                             </svg>
                             <span>المعرف: {lecture._id}</span>
                           </div>
-                          
+
                           <div className="flex items-center gap-2 text-sm text-white/60">
                             <div
                               className="relative"
                               onMouseEnter={() => showPopover(lecture._id)}
                               onMouseLeave={() => hidePopoverWithDelay()}
-                              onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                              }}
                             >
                               <div className="flex items-center gap-2 cursor-default select-none">
                                 <Eye className="w-4 h-4 text-gray-300" />
-                                <span className="whitespace-nowrap">{lecture.viewCount ?? 0} مشاهدات</span>
+                                <span className="whitespace-nowrap">
+                                  {lecture.viewCount ?? 0} مشاهدات
+                                </span>
                               </div>
 
                               {/* Popover */}
@@ -347,41 +456,73 @@ const ChapterDetail = () => {
                                   onMouseLeave={() => hidePopoverWithDelay()}
                                 >
                                   {loadingViewers[lecture._id] ? (
-                                    <div className="text-sm text-white/60 px-2 py-1">جاري التحميل...</div>
-                                  ) : (
-                                    (lectureViewersCache[lecture._id] || []).length > 0 ? (
-                                      <div className="max-h-60 overflow-y-auto">
-                                        {(lectureViewersCache[lecture._id] || []).map((v, i) => (
-                                          <div key={i} className="text-sm text-white px-2 py-1 border-b border-white/10 last:border-0">
-                                            <div className="font-medium text-white">{(v.name || (v.userId && (v.userId.name || v.userId.code)) || v.code)}</div>
-                                            <div className="text-xs text-white/60">{new Date(v.viewedAt || v.createdAt || Date.now()).toLocaleString('ar-SA')}</div>
+                                    <div className="text-sm text-white/60 px-2 py-1">
+                                      جاري التحميل...
+                                    </div>
+                                  ) : (lectureViewersCache[lecture._id] || [])
+                                      .length > 0 ? (
+                                    <div className="max-h-60 overflow-y-auto">
+                                      {(
+                                        lectureViewersCache[lecture._id] || []
+                                      ).map((v, i) => (
+                                        <div
+                                          key={i}
+                                          className="text-sm text-white px-2 py-1 border-b border-white/10 last:border-0"
+                                        >
+                                          <div className="font-medium text-white">
+                                            {v.name ||
+                                              (v.userId &&
+                                                (v.userId.name ||
+                                                  v.userId.code)) ||
+                                              v.code}
                                           </div>
-                                        ))}
-                                      </div>
-                                    ) : (
-                                      <div className="text-sm text-white/60 px-2 py-1">لا توجد مشاهدات</div>
-                                    )
+                                          <div className="text-xs text-white/60">
+                                            {new Date(
+                                              v.viewedAt ||
+                                                v.createdAt ||
+                                                Date.now(),
+                                            ).toLocaleString("ar-SA")}
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <div className="text-sm text-white/60 px-2 py-1">
+                                      لا توجد مشاهدات
+                                    </div>
                                   )}
                                 </div>
                               )}
                             </div>
                           </div>
                         </div>
-                        
+
                         <div className="mt-6 flex items-center gap-3">
                           <span className="text-xs px-2 py-1 bg-white/10 text-white/80 rounded-lg">
                             انقر للمزيد
                           </span>
-                          <svg className="w-5 h-5 text-cyan-400 opacity-0 group-hover:opacity-100 translate-x-0 group-hover:translate-x-1 transition-all duration-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+                          <svg
+                            className="w-5 h-5 text-cyan-400 opacity-0 group-hover:opacity-100 translate-x-0 group-hover:translate-x-1 transition-all duration-300"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M14 5l7 7m0 0l-7 7m7-7H3"
+                            />
                           </svg>
                         </div>
                       </div>
-                      
+
                       {/* Number Right */}
                       <div className="w-20 h-20 flex-shrink-0 rounded-xl bg-gradient-to-br from-blue-900/40 to-cyan-900/40 border-2 border-white/10 group-hover:border-cyan-500/30 transition-colors duration-300 flex items-center justify-center">
                         <div className="w-14 h-14 rounded-full bg-gradient-to-r from-blue-500 to-cyan-500 flex items-center justify-center shadow-lg">
-                          <span className="text-2xl font-bold text-white">#{idx + 1}</span>
+                          <span className="text-2xl font-bold text-white">
+                            #{idx + 1}
+                          </span>
                         </div>
                       </div>
                     </div>
@@ -392,18 +533,21 @@ const ChapterDetail = () => {
               {/* Add Lecture Card - Same layout */}
               <div
                 className={`group relative transition-all duration-500 ${
-                  showForm ? 'scale-[1.02]' : ''
+                  showForm ? "scale-[1.02]" : ""
                 }`}
               >
                 {/* Glow Effect for Add Card */}
                 <div className="absolute inset-0 bg-gradient-to-r from-emerald-500/10 via-teal-500/10 to-cyan-500/10 rounded-2xl blur-xl opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
-                
+
                 <div
                   onClick={() => !showForm && setShowForm(true)}
                   className={`relative bg-gradient-to-r from-gray-800/40 to-gray-900/40 backdrop-blur-sm border ${
-                    showForm ? 'border-emerald-500/50' : 'border-white/10 group-hover:border-emerald-500/30'
+                    showForm
+                      ? "border-emerald-500/50"
+                      : "border-white/10 group-hover:border-emerald-500/30"
                   } rounded-2xl p-6 cursor-pointer transition-all duration-500 ${
-                    !showForm && 'hover:shadow-2xl hover:shadow-emerald-500/10 hover:-translate-y-1'
+                    !showForm &&
+                    "hover:shadow-2xl hover:shadow-emerald-500/10 hover:-translate-y-1"
                   }`}
                 >
                   {!showForm ? (
@@ -415,30 +559,52 @@ const ChapterDetail = () => {
                             جديد
                           </span>
                         </div>
-                        
+
                         <h3 className="text-xl font-bold text-white mb-3 group-hover:text-emerald-300 transition-colors duration-300">
                           إضافة محاضرة جديدة
                         </h3>
-                        
+
                         <p className="text-white/60 text-sm mb-6">
                           أضف محاضرة جديدة لهذا الفصل
                         </p>
-                        
+
                         <div className="flex items-center gap-3">
                           <div className="flex items-center gap-2 text-emerald-400">
-                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                            <svg
+                              className="w-5 h-5"
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M12 4v16m8-8H4"
+                              />
                             </svg>
-                            <span className="text-sm font-medium">انقر للبدء</span>
+                            <span className="text-sm font-medium">
+                              انقر للبدء
+                            </span>
                           </div>
                         </div>
                       </div>
-                      
+
                       {/* Icon Right */}
                       <div className="w-20 h-20 flex-shrink-0 rounded-xl bg-gradient-to-br from-emerald-900/40 to-teal-900/40 border-2 border-emerald-500/20 flex items-center justify-center group-hover:border-emerald-500/40 transition-colors duration-300">
                         <div className="w-14 h-14 rounded-full bg-gradient-to-r from-emerald-500 to-teal-500 flex items-center justify-center shadow-lg">
-                          <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                          <svg
+                            className="w-8 h-8 text-white"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M12 4v16m8-8H4"
+                            />
                           </svg>
                         </div>
                       </div>
@@ -447,19 +613,33 @@ const ChapterDetail = () => {
                     <div onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center justify-between mb-6">
                         <div>
-                          <h3 className="text-xl font-bold text-white">إضافة محاضرة جديدة</h3>
-                          <p className="text-white/60 text-sm mt-1">املأ التفاصيل أدناه</p>
+                          <h3 className="text-xl font-bold text-white">
+                            إضافة محاضرة جديدة
+                          </h3>
+                          <p className="text-white/60 text-sm mt-1">
+                            املأ التفاصيل أدناه
+                          </p>
                         </div>
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
-                              setShowForm(false);
-                              setFormData({ title: '', thumbnail: '' });
+                            setShowForm(false);
+                            setFormData({ title: "", thumbnail: "" });
                           }}
                           className="p-2 rounded-lg bg-white/10 hover:bg-white/20 transition-colors duration-300"
                         >
-                          <svg className="w-5 h-5 text-white/80" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          <svg
+                            className="w-5 h-5 text-white/80"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth={2}
+                              d="M6 18L18 6M6 6l12 12"
+                            />
                           </svg>
                         </button>
                       </div>
@@ -475,8 +655,18 @@ const ChapterDetail = () => {
                         <div>
                           <label className="block text-sm font-medium text-white/80 mb-1">
                             <span className="flex items-center gap-1.5">
-                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 14l9-5-9-5-9 5 9 5z" />
+                              <svg
+                                className="w-4 h-4"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  strokeWidth={2}
+                                  d="M12 14l9-5-9-5-9 5 9 5z"
+                                />
                               </svg>
                               عنوان المحاضرة
                             </span>
@@ -485,7 +675,12 @@ const ChapterDetail = () => {
                             type="text"
                             required
                             value={formData.title}
-                            onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+                            onChange={(e) =>
+                              setFormData({
+                                ...formData,
+                                title: e.target.value,
+                              })
+                            }
                             className="w-full px-3 py-2 text-sm bg-white/5 backdrop-blur-sm border border-white/10 text-white rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all duration-300 placeholder-white/40"
                             placeholder="أدخل عنوان المحاضرة..."
                             autoFocus
@@ -493,10 +688,14 @@ const ChapterDetail = () => {
                         </div>
 
                         <div>
-                          <label className="block text-sm font-medium text-white/80 mb-1">صورة المحاضرة (اختياري)</label>
+                          <label className="block text-sm font-medium text-white/80 mb-1">
+                            صورة المحاضرة (اختياري)
+                          </label>
                           <CloudinaryImageInput
                             value={formData.thumbnail}
-                            onChange={(val) => setFormData({ ...formData, thumbnail: val })}
+                            onChange={(val) =>
+                              setFormData({ ...formData, thumbnail: val })
+                            }
                           />
                         </div>
 
@@ -511,7 +710,7 @@ const ChapterDetail = () => {
                             type="button"
                             onClick={() => {
                               setShowForm(false);
-                                setFormData({ title: '', thumbnail: '' });
+                              setFormData({ title: "", thumbnail: "" });
                             }}
                             className="px-4 py-2 bg-white/10 text-white rounded-lg hover:bg-white/20 font-semibold"
                           >
@@ -528,46 +727,76 @@ const ChapterDetail = () => {
         )}
 
         {/* Details Tab */}
-        {activeTab === 'details' && (
+        {activeTab === "details" && (
           <div className="admin-card p-8 bg-gradient-to-r from-gray-800/40 to-gray-900/40 backdrop-blur-sm border border-white/10 rounded-3xl">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
               <div>
                 <h3 className="text-xl font-bold text-white mb-6 flex items-center gap-2">
-                  <svg className="w-6 h-6 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  <svg
+                    className="w-6 h-6 text-cyan-400"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                    />
                   </svg>
                   معلومات الفصل
                 </h3>
-                
+
                 <div className="space-y-4">
                   <div className="bg-gradient-to-r from-white/5 to-white/10 rounded-xl p-4 backdrop-blur-sm">
                     <div className="text-sm text-white/50 mb-1">اسم الفصل</div>
-                    <div className="text-lg font-semibold text-white">{chapter.title}</div>
+                    <div className="text-lg font-semibold text-white">
+                      {chapter.title}
+                    </div>
                   </div>
-                  
+
                   <div className="bg-gradient-to-r from-white/5 to-white/10 rounded-xl p-4 backdrop-blur-sm">
                     <div className="text-sm text-white/50 mb-1">معرف الفصل</div>
-                    <div className="font-mono text-white/80 break-all">{chapter._id}</div>
+                    <div className="font-mono text-white/80 break-all">
+                      {chapter._id}
+                    </div>
                   </div>
                 </div>
               </div>
-              
+
               <div>
                 <h3 className="text-xl font-bold text-white mb-6 flex items-center gap-2">
-                  <svg className="w-6 h-6 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                  <svg
+                    className="w-6 h-6 text-emerald-400"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
+                    />
                   </svg>
                   إحصائيات
                 </h3>
-                
+
                 <div className="space-y-4">
                   <div className="bg-gradient-to-r from-cyan-500/10 to-blue-500/10 rounded-xl p-4 border-l-4 border-cyan-400">
-                    <div className="text-2xl font-bold text-cyan-300">{lectures.length}</div>
+                    <div className="text-2xl font-bold text-cyan-300">
+                      {lectures.length}
+                    </div>
                     <div className="text-sm text-cyan-200">عدد المحاضرات</div>
                   </div>
-                  
+
                   <div className="bg-gradient-to-r from-emerald-500/10 to-teal-500/10 rounded-xl p-4 border-l-4 border-emerald-400">
-                    <div className="text-2xl font-bold text-emerald-300">{typeof chapter.viewCount === 'number' ? chapter.viewCount : 0}</div>
+                    <div className="text-2xl font-bold text-emerald-300">
+                      {typeof chapter.viewCount === "number"
+                        ? chapter.viewCount
+                        : 0}
+                    </div>
                     <div className="text-sm text-emerald-200">المشاهدات</div>
                   </div>
                 </div>
@@ -577,12 +806,27 @@ const ChapterDetail = () => {
         )}
 
         {/* Settings Tab */}
-        {activeTab === 'settings' && (
+        {activeTab === "settings" && (
           <div className="admin-card p-8 bg-gradient-to-r from-gray-800/40 to-gray-900/40 backdrop-blur-sm border border-white/10 rounded-3xl">
             <h3 className="text-xl font-bold text-white mb-6 flex items-center gap-2">
-              <svg className="w-6 h-6 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              <svg
+                className="w-6 h-6 text-amber-400"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
+                />
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+                />
               </svg>
               إعدادات الفصل
             </h3>
@@ -593,15 +837,29 @@ const ChapterDetail = () => {
                 <div className="flex items-start gap-6">
                   <div className="w-28 h-28 rounded-xl overflow-hidden bg-white/5 border-2 border-white/10 flex items-center justify-center">
                     {editData.thumbnail ? (
-                      <img 
-                        src={typeof editData.thumbnail === 'string' ? editData.thumbnail : ''} 
-                        alt="thumbnail" 
-                        className="w-full h-full object-cover" 
+                      <img
+                        src={
+                          typeof editData.thumbnail === "string"
+                            ? editData.thumbnail
+                            : ""
+                        }
+                        alt="thumbnail"
+                        className="w-full h-full object-cover"
                       />
                     ) : (
                       <div className="w-full h-full flex flex-col items-center justify-center text-white/40">
-                        <svg className="w-8 h-8 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                        <svg
+                          className="w-8 h-8 mb-2"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"
+                          />
                         </svg>
                         <span className="text-xs">صورة</span>
                       </div>
@@ -611,8 +869,12 @@ const ChapterDetail = () => {
                   <div className="flex-1">
                     <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
                       <div>
-                        <h4 className="text-lg font-bold text-amber-300">تعديل معلومات الفصل</h4>
-                        <p className="text-sm text-amber-200/80">قم بتعديل اسم الفصل وصورة العرض</p>
+                        <h4 className="text-lg font-bold text-amber-300">
+                          تعديل معلومات الفصل
+                        </h4>
+                        <p className="text-sm text-amber-200/80">
+                          قم بتعديل اسم الفصل وصورة العرض
+                        </p>
                       </div>
                       <div>
                         {!editMode ? (
@@ -624,10 +886,13 @@ const ChapterDetail = () => {
                           </button>
                         ) : (
                           <button
-                            onClick={() => { 
-                              setEditMode(false); 
-                              setEditData({ title: chapter.title || '', thumbnail: chapter.thumbnail || '' }); 
-                              setEditSuccess(false); 
+                            onClick={() => {
+                              setEditMode(false);
+                              setEditData({
+                                title: chapter.title || "",
+                                thumbnail: chapter.thumbnail || "",
+                              });
+                              setEditSuccess(false);
                             }}
                             className="px-4 py-2 bg-white/10 text-white rounded-xl hover:bg-white/20 font-semibold"
                           >
@@ -638,64 +903,96 @@ const ChapterDetail = () => {
                     </div>
 
                     {editMode && (
-                      <form onSubmit={async (e) => {
-                        e.preventDefault();
-                        setEditing(true);
-                        try {
-                          await chapterAPI.updateChapter(chapterId, editData.title, editData.thumbnail || null, chapter.order || 0);
-                          setEditSuccess(true);
-                          setEditMode(false);
-                          await loadData();
-                        } catch (err) {
-                          // Error updating chapter (handled by UI)
-                          alert('حدث خطأ أثناء تحديث بيانات الفصل');
-                        } finally {
-                          setEditing(false);
-                        }
-                      }} className="space-y-4">
+                      <form
+                        onSubmit={async (e) => {
+                          e.preventDefault();
+                          setEditing(true);
+                          try {
+                            await chapterAPI.updateChapter(
+                              chapterId,
+                              editData.title,
+                              editData.thumbnail || null,
+                              chapter.order || 0,
+                            );
+                            setEditSuccess(true);
+                            setEditMode(false);
+                            await loadData();
+                          } catch (err) {
+                            // Error updating chapter (handled by UI)
+                            alert("حدث خطأ أثناء تحديث بيانات الفصل");
+                          } finally {
+                            setEditing(false);
+                          }
+                        }}
+                        className="space-y-4"
+                      >
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                           <div>
-                            <label className="block text-sm font-medium text-white/80 mb-2">اسم الفصل</label>
+                            <label className="block text-sm font-medium text-white/80 mb-2">
+                              اسم الفصل
+                            </label>
                             <input
                               type="text"
                               value={editData.title}
-                              onChange={(e) => setEditData({ ...editData, title: e.target.value })}
+                              onChange={(e) =>
+                                setEditData({
+                                  ...editData,
+                                  title: e.target.value,
+                                })
+                              }
                               className="w-full px-4 py-2 bg-white/5 backdrop-blur-sm border border-white/10 text-white rounded-lg focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition-all duration-300"
                               required
                             />
                           </div>
 
                           <div>
-                            <label className="block text-sm font-medium text-white/80 mb-2">صورة الغلاف</label>
+                            <label className="block text-sm font-medium text-white/80 mb-2">
+                              صورة الغلاف
+                            </label>
                             <CloudinaryImageInput
                               value={editData.thumbnail}
-                              onChange={(val) => setEditData({ ...editData, thumbnail: val })}
+                              onChange={(val) =>
+                                setEditData({ ...editData, thumbnail: val })
+                              }
                             />
                           </div>
                         </div>
 
                         <div className="flex items-center gap-3">
-                          <button 
-                            type="submit" 
-                            disabled={editing} 
+                          <button
+                            type="submit"
+                            disabled={editing}
                             className="px-5 py-2 bg-gradient-to-r from-emerald-500 to-emerald-600 text-white rounded-lg hover:from-emerald-600 hover:to-emerald-700 font-semibold"
                           >
-                            {editing ? 'جاري الحفظ...' : 'حفظ التغييرات'}
+                            {editing ? "جاري الحفظ..." : "حفظ التغييرات"}
                           </button>
-                          <button 
-                            type="button" 
-                            onClick={() => { 
-                              setEditMode(false); 
-                              setEditData({ title: chapter.title || '', thumbnail: chapter.thumbnail || '' }); 
-                            }} 
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditMode(false);
+                              setEditData({
+                                title: chapter.title || "",
+                                thumbnail: chapter.thumbnail || "",
+                              });
+                            }}
                             className="px-4 py-2 bg-white/10 text-white rounded-lg hover:bg-white/20"
                           >
                             إلغاء
                           </button>
                           {editSuccess && (
                             <span className="text-sm text-emerald-300 flex items-center gap-1">
-                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                              <svg
+                                className="w-4 h-4"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  strokeWidth={2}
+                                  d="M5 13l4 4L19 7"
+                                />
                               </svg>
                               تم الحفظ بنجاح
                             </span>
@@ -711,8 +1008,12 @@ const ChapterDetail = () => {
               <div className="bg-gradient-to-r from-red-500/10 to-pink-500/10 border border-red-400/20 rounded-2xl p-6 backdrop-blur-sm">
                 <div className="flex flex-col md:flex-row items-center justify-between gap-4">
                   <div>
-                    <h4 className="text-lg font-bold text-red-300 mb-2">منطقة الخطر</h4>
-                    <p className="text-red-200/80">حذف هذا الفصل سيزيل جميع المحاضرات المتعلقة به</p>
+                    <h4 className="text-lg font-bold text-red-300 mb-2">
+                      منطقة الخطر
+                    </h4>
+                    <p className="text-red-200/80">
+                      حذف هذا الفصل سيزيل جميع المحاضرات المتعلقة به
+                    </p>
                   </div>
                   <button
                     onClick={handleDeleteChapter}

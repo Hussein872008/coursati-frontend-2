@@ -1,1 +1,1 @@
-export { default } from '../CloudinaryUploadWidget';
+export { default } from "../CloudinaryUploadWidget";

@@ -1,1 +1,1 @@
-export { default } from '../CloudinaryPdfInput';
+export { default } from "../CloudinaryPdfInput";

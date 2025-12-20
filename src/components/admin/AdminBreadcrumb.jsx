@@ -1,7 +1,7 @@
-import React from 'react';
-import { Link } from 'react-router-dom';
+import React from "react";
+import { Link } from "react-router-dom";
 
-const AdminBreadcrumb = ({ items, className = '' }) => {
+const AdminBreadcrumb = ({ items, className = "" }) => {
   if (!items || items.length === 0) {
     return null;
   }
@@ -14,12 +14,24 @@ const AdminBreadcrumb = ({ items, className = '' }) => {
       {items.map((item, index) => (
         <React.Fragment key={index}>
           {index > 0 && (
-            <svg className="w-4 h-4 text-white/60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+            <svg
+              className="w-4 h-4 text-white/60"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M15 19l-7-7 7-7"
+              />
             </svg>
           )}
           {index === items.length - 1 ? (
-            <span aria-current="page" className="text-white font-semibold">{item.label}</span>
+            <span aria-current="page" className="text-white font-semibold">
+              {item.label}
+            </span>
           ) : (
             <Link
               to={item.path}

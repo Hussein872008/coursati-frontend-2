@@ -1,1 +1,1 @@
-export { default } from '../FileUploadWidget';
+export { default } from "../FileUploadWidget";

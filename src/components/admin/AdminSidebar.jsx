@@ -1,6 +1,10 @@
-import React from 'react';
-import { Link, useLocation } from 'react-router-dom';
-import { UserGroupIcon, BookOpenIcon, Cog6ToothIcon } from '@heroicons/react/24/solid';
+import React from "react";
+import { Link, useLocation } from "react-router-dom";
+import {
+  UserGroupIcon,
+  BookOpenIcon,
+  Cog6ToothIcon,
+} from "@heroicons/react/24/solid";
 
 const AdminSidebar = ({ isOpen, onToggle }) => {
   const location = useLocation();
@@ -11,18 +15,18 @@ const AdminSidebar = ({ isOpen, onToggle }) => {
 
   const menuItems = [
     {
-      label: 'لوحة التحكم',
-      path: 'dashboard',
+      label: "لوحة التحكم",
+      path: "dashboard",
       icon: Cog6ToothIcon,
     },
     {
-      label: 'المستخدمين',
-      path: 'users',
+      label: "المستخدمين",
+      path: "users",
       icon: UserGroupIcon,
     },
     {
-      label: 'إدارة المحتوى',
-      path: 'content',
+      label: "إدارة المحتوى",
+      path: "content",
       icon: BookOpenIcon,
     },
   ];
@@ -43,7 +47,7 @@ const AdminSidebar = ({ isOpen, onToggle }) => {
             className="text-slate-300 hover:text-white transition-colors p-1 rounded"
             title="تبديل الشريط"
           >
-            {isOpen ? '◀' : '▶'}
+            {isOpen ? "◀" : "▶"}
           </button>
         </div>
 

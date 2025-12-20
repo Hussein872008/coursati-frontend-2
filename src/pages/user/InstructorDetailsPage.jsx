@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from 'react';
-import useTitle from '../../hooks/useTitle';
-import { useNavigate, useParams } from 'react-router-dom';
-import { useAuth } from '../../hooks/useAuth';
-import { instructorAPI, chapterAPI } from '../../utils/api';
-import UserHeader from '../../components/user/UserHeader';
-import UserFooter from '../../components/user/UserFooter';
+import React, { useState, useEffect } from "react";
+import useTitle from "../../hooks/useTitle";
+import { useNavigate, useParams } from "react-router-dom";
+import { useAuth } from "../../hooks/useAuth";
+import { instructorAPI, chapterAPI } from "../../utils/api";
+import UserHeader from "../../components/user/UserHeader";
+import UserFooter from "../../components/user/UserFooter";
 import {
   BookOpenIcon,
   ClockIcon,
@@ -15,17 +15,17 @@ import {
   ShieldCheckIcon,
   DocumentTextIcon,
   VideoCameraIcon,
-  UserGroupIcon
-} from '@heroicons/react/24/outline';
+  UserGroupIcon,
+} from "@heroicons/react/24/outline";
 import {
   StarIcon as StarSolid,
   CheckCircleIcon as CheckCircleSolid,
   TrophyIcon as TrophySolid,
-  AcademicCapIcon as AcademicCapSolid
-} from '@heroicons/react/24/solid';
+  AcademicCapIcon as AcademicCapSolid,
+} from "@heroicons/react/24/solid";
 
 const InstructorDetailsPage = () => {
-  useTitle('كورساتي — الفصول  ');
+  useTitle("كورساتي — الفصول  ");
   const navigate = useNavigate();
   const { instructorId } = useParams();
   const { user } = useAuth();
@@ -43,30 +43,32 @@ const InstructorDetailsPage = () => {
     totalHours: 0,
     rating: 4.8,
     students: 2500,
-    completionRate: 92
+    completionRate: 92,
   });
-  const [activeTab, setActiveTab] = useState('content');
+  const [activeTab, setActiveTab] = useState("content");
   const [hoveredChapter, setHoveredChapter] = useState(null);
 
   useEffect(() => {
     const loadData = async () => {
       try {
         setLoading(true);
-        const instructorRes = await instructorAPI.getInstructorById(instructorId);
+        const instructorRes =
+          await instructorAPI.getInstructorById(instructorId);
         setInstructor(instructorRes.data);
 
-        const chaptersRes = await chapterAPI.getChaptersByInstructor(instructorId);
+        const chaptersRes =
+          await chapterAPI.getChaptersByInstructor(instructorId);
         setChapters(chaptersRes.data || []);
-        
+
         // حساب الإحصائيات
         let totalLectures = 0;
         let totalVideos = 0;
         let totalPDFs = 0;
         let totalHours = 0;
-        
-        chaptersRes.data?.forEach(chapter => {
+
+        chaptersRes.data?.forEach((chapter) => {
           totalLectures += chapter.lectures?.length || 0;
-          chapter.lectures?.forEach(lecture => {
+          chapter.lectures?.forEach((lecture) => {
             totalVideos += lecture.videos?.length || 0;
             totalPDFs += lecture.pdfs?.length || 0;
             totalHours += lecture.duration || 0;
@@ -81,7 +83,7 @@ const InstructorDetailsPage = () => {
           totalHours: Math.ceil(totalHours / 60),
           rating: 4.8,
           students: 2500,
-          completionRate: 92
+          completionRate: 92,
         });
 
         setLoading(false);
@@ -95,9 +97,9 @@ const InstructorDetailsPage = () => {
   }, [instructorId]);
 
   const toggleChapter = (chapterId) => {
-    setExpandedChapters(prev => ({
+    setExpandedChapters((prev) => ({
       ...prev,
-      [chapterId]: !prev[chapterId]
+      [chapterId]: !prev[chapterId],
     }));
   };
 
@@ -105,7 +107,9 @@ const InstructorDetailsPage = () => {
     setSelectedLectureId(lectureId);
     // تحريك الشاشة للمحتوى على الأجهزة الصغيرة
     if (window.innerWidth < 768) {
-      document.getElementById('lecture-content')?.scrollIntoView({ behavior: 'smooth' });
+      document
+        .getElementById("lecture-content")
+        ?.scrollIntoView({ behavior: "smooth" });
     }
   };
 
@@ -115,7 +119,7 @@ const InstructorDetailsPage = () => {
         {[...Array(5)].map((_, i) => (
           <StarSolid
             key={i}
-            className={`w-5 h-5 ${i < Math.floor(rating) ? 'text-yellow-400' : 'text-gray-600'}`}
+            className={`w-5 h-5 ${i < Math.floor(rating) ? "text-yellow-400" : "text-gray-600"}`}
           />
         ))}
         <span className="text-white/80 text-sm mr-1">{rating}</span>
@@ -124,8 +128,10 @@ const InstructorDetailsPage = () => {
   };
 
   const getLectureIcon = (lecture) => {
-    if (lecture.videos?.length > 0) return <VideoCameraIcon className="w-4 h-4 text-cyan-400" />;
-    if (lecture.pdfs?.length > 0) return <DocumentTextIcon className="w-4 h-4 text-purple-400" />;
+    if (lecture.videos?.length > 0)
+      return <VideoCameraIcon className="w-4 h-4 text-cyan-400" />;
+    if (lecture.pdfs?.length > 0)
+      return <DocumentTextIcon className="w-4 h-4 text-purple-400" />;
     return <BookOpenIcon className="w-4 h-4 text-emerald-400" />;
   };
 
@@ -135,7 +141,9 @@ const InstructorDetailsPage = () => {
         <div className="text-center">
           <div className="w-20 h-20 border-4 border-white/20 border-t-purple-500 rounded-full animate-spin mx-auto mb-4"></div>
           <p className="text-white/80 text-lg">جاري تحميل تفاصيل المدرس...</p>
-          <p className="text-white/60 text-sm mt-2">جاري تحميل الفصول والمحاضرات</p>
+          <p className="text-white/60 text-sm mt-2">
+            جاري تحميل الفصول والمحاضرات
+          </p>
         </div>
       </div>
     );
@@ -143,8 +151,6 @@ const InstructorDetailsPage = () => {
 
   return (
     <div className="min-h-screen " dir="rtl">
-
-
       {/* شريط التنقل العلوي */}
       <UserHeader showBackButton={true} />
 
@@ -158,7 +164,7 @@ const InstructorDetailsPage = () => {
               <div className="lg:w-1/3">
                 <div className="relative group">
                   <div className="absolute inset-0 bg-gradient-to-r from-purple-500/20 via-blue-500/20 to-cyan-500/20 rounded-2xl blur-xl opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
-                  
+
                   <div className="relative overflow-hidden rounded-2xl border-2 border-white/10 bg-gradient-to-br from-gray-800/40 to-gray-900/40 backdrop-blur-xl">
                     {instructor.thumbnailUrl ? (
                       <img
@@ -179,7 +185,9 @@ const InstructorDetailsPage = () => {
                 <div className="bg-gradient-to-br from-gray-800/40 to-gray-900/40 backdrop-blur-xl border border-white/10 rounded-2xl p-8">
                   <div className="flex items-start justify-between mb-6">
                     <div>
-                      <h1 className="text-2xl md:text-3xl font-bold text-white mb-3">{instructor.title}</h1>
+                      <h1 className="text-2xl md:text-3xl font-bold text-white mb-3">
+                        {instructor.title}
+                      </h1>
                     </div>
                   </div>
 
@@ -190,7 +198,9 @@ const InstructorDetailsPage = () => {
                         <BookOpenIcon className="w-5 h-5 text-cyan-400" />
                         <div>
                           <div className="text-sm text-white/60">الفصول</div>
-                          <div className="font-bold text-white">{stats.totalChapters}</div>
+                          <div className="font-bold text-white">
+                            {stats.totalChapters}
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -199,11 +209,12 @@ const InstructorDetailsPage = () => {
                         <AcademicCapIcon className="w-5 h-5 text-purple-400" />
                         <div>
                           <div className="text-sm text-white/60">المحاضرات</div>
-                          <div className="font-bold text-white">{stats.totalLectures}</div>
+                          <div className="font-bold text-white">
+                            {stats.totalLectures}
+                          </div>
                         </div>
                       </div>
                     </div>
-
                   </div>
                 </div>
               </div>
@@ -216,8 +227,18 @@ const InstructorDetailsPage = () => {
           <div className="mb-8 p-4 bg-gradient-to-r from-red-500/20 to-rose-500/20 border border-red-500/30 rounded-2xl backdrop-blur-sm">
             <div className="flex items-center gap-3">
               <div className="p-2 bg-red-500/20 rounded-lg">
-                <svg className="w-5 h-5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                <svg
+                  className="w-5 h-5 text-red-400"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                  />
                 </svg>
               </div>
               <div className="text-white">{error}</div>
@@ -227,58 +248,59 @@ const InstructorDetailsPage = () => {
 
         {/* الفصول */}
         <div>
-            <div className="bg-gradient-to-br from-gray-800/40 to-gray-900/40 backdrop-blur-xl border border-white/10 rounded-2xl p-6">
+          <div className="bg-gradient-to-br from-gray-800/40 to-gray-900/40 backdrop-blur-xl border border-white/10 rounded-2xl p-6">
             <div className="flex items-center justify-between mb-6">
-              <h3 className="text-2xl font-bold text-white">الفصول والمحاضرات</h3>
+              <h3 className="text-2xl font-bold text-white">
+                الفصول والمحاضرات
+              </h3>
               <div className="flex items-center gap-2 text-sm text-white/60">
                 <PlayCircleIcon className="w-4 h-4" />
                 <span>{stats.totalLectures} محاضرة</span>
               </div>
             </div>
 
-{chapters.length === 0 ? (
-  <div className="text-center py-20">
-    <BookOpenIcon className="w-14 h-14 text-white/25 mx-auto mb-4" />
-    <p className="text-white/60 text-sm">لا توجد فصول بعد</p>
-  </div>
-) : (
-  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-    {chapters.map((chapter) => (
-      <button
-        key={chapter._id}
-        onClick={() => navigate(`/chapter/${chapter._id}`)}
-        className="group rounded-xl overflow-hidden border border-white/10 bg-gradient-to-br from-gray-800/50 to-gray-900/50 hover:border-purple-500/40 hover:shadow-xl transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-purple-500/30"
-      >
-        {/* Thumbnail */}
-        {chapter.thumbnailUrl ? (
-          <img
-            src={chapter.thumbnailUrl}
-            alt={chapter.title}
-            loading="lazy"
-            className="w-full h-32 sm:h-40 object-cover"
-          />
-        ) : (
-          <div className="w-full h-32 sm:h-40 bg-white/5 flex items-center justify-center">
-            <BookOpenIcon className="w-10 h-10 sm:w-12 sm:h-12 text-white/30" />
-          </div>
-        )}
+            {chapters.length === 0 ? (
+              <div className="text-center py-20">
+                <BookOpenIcon className="w-14 h-14 text-white/25 mx-auto mb-4" />
+                <p className="text-white/60 text-sm">لا توجد فصول بعد</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+                {chapters.map((chapter) => (
+                  <button
+                    key={chapter._id}
+                    onClick={() => navigate(`/chapter/${chapter._id}`)}
+                    className="group rounded-xl overflow-hidden border border-white/10 bg-gradient-to-br from-gray-800/50 to-gray-900/50 hover:border-purple-500/40 hover:shadow-xl transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-purple-500/30"
+                  >
+                    {/* Thumbnail */}
+                    {chapter.thumbnailUrl ? (
+                      <img
+                        src={chapter.thumbnailUrl}
+                        alt={chapter.title}
+                        loading="lazy"
+                        className="w-full h-32 sm:h-40 object-cover"
+                      />
+                    ) : (
+                      <div className="w-full h-32 sm:h-40 bg-white/5 flex items-center justify-center">
+                        <BookOpenIcon className="w-10 h-10 sm:w-12 sm:h-12 text-white/30" />
+                      </div>
+                    )}
 
-        {/* Content: title and lectures count on single row with simple badge */}
-        <div className="p-3">
-          <div className="flex items-center justify-between gap-3">
-            <h4 className="text-base font-semibold text-white line-clamp-2 text-right">
-              {chapter.title}
-            </h4>
-            <div className="text-xs bg-gradient-to-r from-purple-500/20 to-blue-500/20 text-white/90 px-3 py-1 rounded-full whitespace-nowrap">
-              {chapter.lectures?.length || 0} محاضرة
-            </div>
-          </div>
-        </div>
-      </button>
-    ))}
-  </div>
-)}
-
+                    {/* Content: title and lectures count on single row with simple badge */}
+                    <div className="p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <h4 className="text-base font-semibold text-white line-clamp-2 text-right">
+                          {chapter.title}
+                        </h4>
+                        <div className="text-xs bg-gradient-to-r from-purple-500/20 to-blue-500/20 text-white/90 px-3 py-1 rounded-full whitespace-nowrap">
+                          {chapter.lectures?.length || 0} محاضرة
+                        </div>
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>
