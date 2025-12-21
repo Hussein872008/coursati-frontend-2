@@ -238,11 +238,11 @@ const ChapterDetail = () => {
         <AdminBreadcrumb items={breadcrumbs} className="mb-3 -mt-2" />
 
         {/* Chapter Header */}
-        <div className="admin-card p-8 mb-8 bg-gradient-to-r from-gray-800/60 via-gray-900/60 to-gray-800/60 backdrop-blur-xl border border-white/10 rounded-3xl shadow-2xl">
-          <div className="flex flex-col md:flex-row items-center justify-between">
-            <div className="flex items-center gap-6 mb-4 md:mb-0">
+        <div className="admin-card p-6 md:p-8 mb-8 bg-gradient-to-r from-gray-800/60 via-gray-900/60 to-gray-800/60 backdrop-blur-xl border border-white/10 rounded-3xl shadow-2xl">
+          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+            <div className="flex items-start md:items-center gap-4">
               {(chapter.thumbnailUrl || chapter.thumbnail) && (
-                <div className="w-20 h-20 rounded-2xl overflow-hidden border-2 border-white/10">
+                <div className="w-24 sm:w-32 md:w-20 h-24 sm:h-28 md:h-20 rounded-2xl overflow-hidden border-2 border-white/10 bg-white/3 flex items-center justify-center">
                   <img
                     src={chapter.thumbnailUrl || chapter.thumbnail}
                     alt={chapter.title}
@@ -251,7 +251,7 @@ const ChapterDetail = () => {
                 </div>
               )}
               <div>
-                <h1 className="text-3xl font-bold bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-500 bg-clip-text text-transparent">
+                <h1 className="text-2xl md:text-3xl font-bold bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-500 bg-clip-text text-transparent">
                   {chapter.title}
                 </h1>
                 <p className="text-white/60 text-sm mt-1">
@@ -260,19 +260,17 @@ const ChapterDetail = () => {
               </div>
             </div>
 
-            <div className="flex items-center gap-4 bg-gray-900/40 backdrop-blur-sm rounded-2xl p-4 border border-white/10">
-              <div className="text-center px-4">
-                <div className="text-3xl font-bold bg-gradient-to-r from-cyan-400 to-blue-400 bg-clip-text text-transparent">
+            <div className="flex items-center gap-3 bg-gray-900/40 backdrop-blur-sm rounded-2xl p-2 md:p-3 border border-white/10 mt-1 md:mt-0">
+              <div className="text-center px-3">
+                <div className="text-2xl md:text-3xl font-bold bg-gradient-to-r from-cyan-400 to-blue-400 bg-clip-text text-transparent">
                   {lectures.length}
                 </div>
                 <div className="text-sm text-white/70">المحاضرات</div>
               </div>
-              <div className="h-10 w-px bg-white/10"></div>
-              <div className="text-center px-4">
-                <div className="text-3xl font-bold bg-gradient-to-r from-emerald-400 to-teal-400 bg-clip-text text-transparent">
-                  {typeof chapter.viewCount === "number"
-                    ? chapter.viewCount
-                    : 0}
+              <div className="h-8 w-px bg-white/10 hidden md:block" />
+              <div className="text-center px-3">
+                <div className="text-2xl md:text-3xl font-bold bg-gradient-to-r from-emerald-400 to-teal-400 bg-clip-text text-transparent">
+                  {typeof chapter.viewCount === "number" ? chapter.viewCount : 0}
                 </div>
                 <div className="text-sm text-white/70">المشاهدات</div>
               </div>
@@ -282,10 +280,10 @@ const ChapterDetail = () => {
 
         {/* Tabs Navigation */}
         <div className="admin-card p-2 mb-8 bg-gradient-to-r from-gray-800/40 to-gray-900/40 backdrop-blur-sm border border-white/10 rounded-2xl">
-          <div className="flex space-x-2 rtl:space-x-reverse">
+          <div className="flex space-x-2 rtl:space-x-reverse overflow-x-auto no-scrollbar py-2">
             <button
               onClick={() => setActiveTab("lectures")}
-              className={`flex-1 px-6 py-3 rounded-xl font-semibold transition-all duration-200 flex items-center justify-center gap-2 ${
+              className={`min-w-[140px] whitespace-nowrap px-6 py-3 rounded-xl font-semibold transition-all duration-200 flex items-center justify-center gap-2 ${
                 activeTab === "lectures"
                   ? "bg-gradient-to-r from-cyan-500 to-blue-500 text-white shadow-md"
                   : "text-white/60 hover:bg-white/5 hover:text-white/80"
@@ -315,7 +313,7 @@ const ChapterDetail = () => {
 
             <button
               onClick={() => setActiveTab("details")}
-              className={`flex-1 px-6 py-3 rounded-xl font-semibold transition-all duration-200 flex items-center justify-center gap-2 ${
+              className={`min-w-[140px] whitespace-nowrap px-6 py-3 rounded-xl font-semibold transition-all duration-200 flex items-center justify-center gap-2 ${
                 activeTab === "details"
                   ? "bg-gradient-to-r from-cyan-500 to-blue-500 text-white shadow-md"
                   : "text-white/60 hover:bg-white/5 hover:text-white/80"
@@ -345,7 +343,7 @@ const ChapterDetail = () => {
 
             <button
               onClick={() => setActiveTab("settings")}
-              className={`flex-1 px-6 py-3 rounded-xl font-semibold transition-all duration-200 flex items-center justify-center gap-2 ${
+              className={`min-w-[140px] whitespace-nowrap px-6 py-3 rounded-xl font-semibold transition-all duration-200 flex items-center justify-center gap-2 ${
                 activeTab === "settings"
                   ? "bg-gradient-to-r from-cyan-500 to-blue-500 text-white shadow-md"
                   : "text-white/60 hover:bg-white/5 hover:text-white/80"
@@ -389,27 +387,20 @@ const ChapterDetail = () => {
                     }`}
                   />
 
-                  <div className="relative bg-gradient-to-r from-gray-800/40 to-gray-900/40 backdrop-blur-sm border border-white/10 rounded-2xl p-6 hover:border-cyan-500/30 hover:shadow-2xl hover:shadow-cyan-500/10 transition-all duration-500">
-                    <div className="flex gap-6 items-center">
+                  <div className="relative bg-gradient-to-r from-gray-800/40 to-gray-900/40 backdrop-blur-sm border border-white/10 rounded-2xl p-4 sm:p-6 hover:border-cyan-500/30 hover:shadow-2xl hover:shadow-cyan-500/10 transition-all duration-500">
+                    <div className="flex flex-col sm:flex-row gap-4 sm:gap-6 items-start">
                       {/* Content Left */}
                       <div className="flex-1">
-                        <div className="flex items-center gap-3 mb-4">
+                        <div className="flex items-start sm:items-center gap-3 mb-3">
                           <span className="px-3 py-1 bg-gradient-to-r from-blue-600 to-cyan-600 text-white text-xs font-semibold rounded-full shadow">
                             محاضرة #{idx + 1}
                           </span>
                           <span className="text-xs text-white/50">
                             #{lecture._id.slice(0, 8)}
                           </span>
-                          {(lecture.thumbnailUrl || lecture.thumbnail) && (
-                            <img
-                              src={lecture.thumbnailUrl || lecture.thumbnail}
-                              alt={lecture.title}
-                              className="w-28 h-16 object-cover rounded-md ml-3 hidden sm:block"
-                            />
-                          )}
                         </div>
 
-                        <h3 className="text-xl font-bold text-white mb-3 group-hover:text-cyan-300 transition-colors duration-300 line-clamp-2">
+                        <h3 className="text-lg sm:text-xl font-bold text-white mb-2 sm:mb-3 group-hover:text-cyan-300 transition-colors duration-300 line-clamp-2">
                           {lecture.title}
                         </h3>
 
@@ -451,7 +442,7 @@ const ChapterDetail = () => {
                               {/* Popover */}
                               {hoveredLecture === lecture._id && (
                                 <div
-                                  className="absolute z-50 top-8 right-0 bg-gray-900/95 border border-white/10 rounded-lg shadow-2xl p-3 min-w-max max-w-xs text-sm text-white"
+                                  className="absolute z-50 top-10 md:top-8 right-0 md:right-0 left-0 md:left-auto mx-4 md:mx-0 bg-gray-900/95 border border-white/10 rounded-lg shadow-2xl p-3 min-w-max max-w-xs text-sm text-white"
                                   onMouseEnter={() => showPopover(lecture._id)}
                                   onMouseLeave={() => hidePopoverWithDelay()}
                                 >
@@ -517,13 +508,21 @@ const ChapterDetail = () => {
                         </div>
                       </div>
 
-                      {/* Number Right */}
-                      <div className="w-20 h-20 flex-shrink-0 rounded-xl bg-gradient-to-br from-blue-900/40 to-cyan-900/40 border-2 border-white/10 group-hover:border-cyan-500/30 transition-colors duration-300 flex items-center justify-center">
-                        <div className="w-14 h-14 rounded-full bg-gradient-to-r from-blue-500 to-cyan-500 flex items-center justify-center shadow-lg">
-                          <span className="text-2xl font-bold text-white">
-                            #{idx + 1}
-                          </span>
-                        </div>
+                      {/* Right area: show lecture thumbnail on md+, otherwise show number badge when no thumbnail */}
+                      <div className="w-full sm:w-28 md:w-20 h-40 sm:h-28 md:h-20 flex-shrink-0 rounded-xl overflow-hidden bg-blue-900/40 border-2 border-white/10 group-hover:border-cyan-500/30 transition-colors duration-300 flex items-center justify-center">
+                        {lecture.thumbnailUrl || lecture.thumbnail ? (
+                          <img
+                            src={lecture.thumbnailUrl || lecture.thumbnail}
+                            alt={lecture.title}
+                            className="block w-full h-full object-contain"
+                          />
+                        ) : (
+                          <div className="w-14 h-14 rounded-full bg-gradient-to-r from-blue-500 to-cyan-500 flex items-center justify-center shadow-lg">
+                            <span className="text-xl sm:text-2xl font-bold text-white">
+                              #{idx + 1}
+                            </span>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -531,7 +530,7 @@ const ChapterDetail = () => {
               ))}
 
               {/* Add Lecture Card - Same layout */}
-              <div
+                  <div
                 className={`group relative transition-all duration-500 ${
                   showForm ? "scale-[1.02]" : ""
                 }`}
@@ -551,7 +550,7 @@ const ChapterDetail = () => {
                   }`}
                 >
                   {!showForm ? (
-                    <div className="flex gap-6 items-center">
+                    <div className="flex flex-col sm:flex-row gap-4 sm:gap-6 items-start">
                       {/* Content Left */}
                       <div className="flex-1">
                         <div className="mb-4">
@@ -591,7 +590,7 @@ const ChapterDetail = () => {
                       </div>
 
                       {/* Icon Right */}
-                      <div className="w-20 h-20 flex-shrink-0 rounded-xl bg-gradient-to-br from-emerald-900/40 to-teal-900/40 border-2 border-emerald-500/20 flex items-center justify-center group-hover:border-emerald-500/40 transition-colors duration-300">
+                      <div className="w-full sm:w-28 md:w-20 h-36 sm:h-28 md:h-20 flex-shrink-0 rounded-xl bg-gradient-to-br from-emerald-900/40 to-teal-900/40 border-2 border-emerald-500/20 flex items-center justify-center group-hover:border-emerald-500/40 transition-colors duration-300">
                         <div className="w-14 h-14 rounded-full bg-gradient-to-r from-emerald-500 to-teal-500 flex items-center justify-center shadow-lg">
                           <svg
                             className="w-8 h-8 text-white"
@@ -699,10 +698,10 @@ const ChapterDetail = () => {
                           />
                         </div>
 
-                        <div className="flex gap-2 justify-start">
+                        <div className="flex flex-col sm:flex-row gap-2 justify-start w-full">
                           <button
                             type="submit"
-                            className="px-4 py-2 bg-gradient-to-r from-emerald-500 to-emerald-600 text-white rounded-lg hover:from-emerald-600 hover:to-emerald-700 font-semibold"
+                            className="w-full sm:w-auto px-4 py-2 bg-gradient-to-r from-emerald-500 to-emerald-600 text-white rounded-lg hover:from-emerald-600 hover:to-emerald-700 font-semibold"
                           >
                             إضافة المحاضرة
                           </button>
@@ -712,7 +711,7 @@ const ChapterDetail = () => {
                               setShowForm(false);
                               setFormData({ title: "", thumbnail: "" });
                             }}
-                            className="px-4 py-2 bg-white/10 text-white rounded-lg hover:bg-white/20 font-semibold"
+                            className="w-full sm:w-auto px-4 py-2 bg-white/10 text-white rounded-lg hover:bg-white/20 font-semibold"
                           >
                             إلغاء
                           </button>

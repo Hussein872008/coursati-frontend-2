@@ -1,593 +1,1418 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import useTitle from "../../../hooks/useTitle";
-import { Link } from "react-router-dom";
-import { materialAPI, adminAPI, instructorAPI } from "../../../utils/api";
-import { useFileUpload } from "../../../hooks/useFileUpload";
-import AdminBreadcrumb from "../../../components/admin/AdminBreadcrumb";
-import CloudinaryImageInput from "../../../components/CloudinaryImageInput";
+import React, {
+  useEffect,
+  useRef,
+  useState,
+  useCallback,
+} from "react";
+import { videosAPI } from "../utils/api";
+import api from "../utils/api";
+import { useAuth } from "../hooks/useAuth";
 
-const MaterialsList = () => {
-  useTitle("كورساتي — المواد (إدارة)");
-  const queryClient = useQueryClient();
-  const { data: materials = [], isLoading: loading } = useQuery({
-    queryKey: ["materials"],
-    queryFn: async () => {
-      const res = await materialAPI.getAllMaterials();
-      return res.data || [];
-    },
-    staleTime: 60_000,
-    cacheTime: 5 * 60_000,
+function VideoPlayer({ video }) {
+  const videoRef = useRef(null);
+  const containerRef = useRef(null);
+  const progressRef = useRef(null);
+  const qualityRef = useRef(null);
+  const speedRef = useRef(null);
+  const settingsRef = useRef(null);
+  const hlsRef = useRef(null);
+
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [showControls, setShowControls] = useState(true);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [bufferedPercent, setBufferedPercent] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [qualityMenuOpen, setQualityMenuOpen] = useState(false);
+  const [speedMenuOpen, setSpeedMenuOpen] = useState(false);
+  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [currentQuality, setCurrentQuality] = useState(null);
+  const [shouldInit, setShouldInit] = useState(true);
+
+  const [volume, setVolume] = useState(() => {
+    try {
+      const saved = localStorage.getItem("video-volume");
+      return saved ? Math.min(1, Math.max(0, parseFloat(saved))) : 0.7;
+    } catch (e) {
+      return 0.7;
+    }
   });
-  const [instructorsTotal, setInstructorsTotal] = useState(0);
-  const [formData, setFormData] = useState({ title: "", thumbnail: "" });
-  const [showForm, setShowForm] = useState(false);
-  const [hoveredCard, setHoveredCard] = useState(null);
-  const [instructorCounts, setInstructorCounts] = useState({});
-  const [isSmall, setIsSmall] = useState(false);
-  const {
-    uploadFile,
-    loading: uploading,
-    error: uploadError,
-  } = useFileUpload("/materials");
 
+  const [playbackRate, setPlaybackRate] = useState(() => {
+    try {
+      const saved = localStorage.getItem("video-rate");
+      return saved ? Math.min(3, Math.max(0.25, parseFloat(saved))) : 1.0;
+    } catch (e) {
+      return 1.0;
+    }
+  });
+
+  const [actionFeedback, setActionFeedback] = useState({
+    visible: false,
+    icon: null,
+    text: "",
+  });
+
+  const [seekFeedback, setSeekFeedback] = useState({
+    visible: false,
+    type: "",
+    time: "",
+  });
+
+  const [rateFeedback, setRateFeedback] = useState({ visible: false, rate: 1 });
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(null);
+  const [hoverProgress, setHoverProgress] = useState(false);
+
+  const hideControlsTimeoutRef = useRef(null);
+  const prevVolumeRef = useRef(volume);
+  const progressDragRef = useRef(false);
+  const progressDragStartXRef = useRef(0);
+  const progressDragStartTimeRef = useRef(0);
+  const lastRenderedTimeRef = useRef(0);
+  const fragRetriesRef = useRef({});
+  const mediaErrorRetriesRef = useRef(0);
+  const globalRetriesRef = useRef(0);
+  const maxGlobalRetries = 3;
+
+  const { user, isLoggedIn } = useAuth();
+
+  // دقة الفيديو المتاحة
+  const RES_MAP = {
+    "144": { w: 256, h: 144 },
+    "240": { w: 426, h: 240 },
+    "360": { w: 640, h: 360 },
+    "480": { w: 854, h: 480 },
+    "720": { w: 1280, h: 720 },
+    "1080": { w: 1920, h: 1080 },
+    "1440": { w: 2560, h: 1440 },
+    "2160": { w: 3840, h: 2160 },
+  };
+
+  // وظائف مساعدة للتحكم في إخفاء عناصر التحكم
+  const scheduleHideControls = useCallback((delay = 3000) => {
+    if (hideControlsTimeoutRef.current) {
+      clearTimeout(hideControlsTimeoutRef.current);
+    }
+    hideControlsTimeoutRef.current = setTimeout(() => {
+      if (!qualityMenuOpen && !speedMenuOpen && !settingsMenuOpen) {
+        setShowControls(false);
+      }
+    }, delay);
+  }, [qualityMenuOpen, speedMenuOpen, settingsMenuOpen]);
+
+  const clearHideControls = useCallback(() => {
+    if (hideControlsTimeoutRef.current) {
+      clearTimeout(hideControlsTimeoutRef.current);
+      hideControlsTimeoutRef.current = null;
+    }
+  }, []);
+
+  // عرض ردود الفعل المرئية
+  const showActionFeedback = useCallback((icon, text, timeout = 800) => {
+    setActionFeedback({ visible: true, icon, text });
+    setTimeout(
+      () => setActionFeedback({ visible: false, icon: null, text: "" }),
+      timeout,
+    );
+  }, []);
+
+  const showSeekFeedback = useCallback((type) => {
+    const time = type === "forward" ? "+5s" : "-5s";
+    setSeekFeedback({ visible: true, type, time });
+    setTimeout(() => {
+      setSeekFeedback({ visible: false, type: "", time: "" });
+    }, 800);
+  }, []);
+
+  const showRateFeedback = useCallback((rate) => {
+    setRateFeedback({ visible: true, rate });
+    setTimeout(() => {
+      setRateFeedback({ visible: false, rate: 1 });
+    }, 1000);
+  }, []);
+
+  // التشغيل الآمن
+  const safePlay = useCallback(() => {
+    try {
+      const v = videoRef.current;
+      if (!v) return;
+      const playPromise = v.play();
+      if (playPromise && typeof playPromise.then === "function") {
+        playPromise.then(() => {
+          setIsPlaying(true);
+        }).catch((err) => {
+          if (err && err.name === "AbortError") return;
+          console.warn("Playback error:", err);
+        });
+      }
+    } catch (e) {
+      console.warn("Safe play error:", e);
+    }
+  }, []);
+
+  // التبديل بين التشغيل والإيقاف
+  const togglePlayPause = useCallback(() => {
+    try {
+      const v = videoRef.current;
+      if (!v) return;
+      if (v.paused) {
+        safePlay();
+      } else {
+        v.pause();
+        setIsPlaying(false);
+      }
+      setShowControls(true);
+      scheduleHideControls(3000);
+    } catch (e) {
+      console.warn("Toggle play/pause error:", e);
+    }
+  }, [safePlay, scheduleHideControls]);
+
+  // إعادة المحاولة
+  const retryPlayback = useCallback(() => {
+    try {
+      setError(null);
+      setLoading(true);
+      if (hlsRef.current) {
+        try {
+          hlsRef.current.destroy();
+        } catch (e) {}
+        hlsRef.current = null;
+      }
+      if (videoRef.current) {
+        videoRef.current.pause();
+        videoRef.current.removeAttribute("src");
+        try {
+          videoRef.current.load();
+        } catch (e) {}
+      }
+      setShouldInit(false);
+      setTimeout(() => {
+        setShouldInit(true);
+      }, 80);
+    } catch (e) {
+      console.warn("Retry playback error:", e);
+    }
+  }, []);
+
+  // التبديل بين وضع ملء الشاشة والعادي
+  const toggleFullscreen = useCallback(() => {
+    try {
+      if (!videoRef.current) return;
+      const container = (containerRef.current && containerRef.current.parentElement) || videoRef.current.parentElement;
+      if (!container) return;
+
+      if (!document.fullscreenElement) {
+        if (container.requestFullscreen) {
+          container.requestFullscreen();
+        } else if (container.webkitRequestFullscreen) {
+          container.webkitRequestFullscreen();
+        } else if (container.msRequestFullscreen) {
+          container.msRequestFullscreen();
+        }
+        setIsFullscreen(true);
+      } else {
+        if (document.exitFullscreen) {
+          document.exitFullscreen();
+        } else if (document.webkitExitFullscreen) {
+          document.webkitExitFullscreen();
+        } else if (document.msExitFullscreen) {
+          document.msExitFullscreen();
+        }
+        setIsFullscreen(false);
+      }
+    } catch (e) {
+      console.warn("Fullscreen toggle error:", e);
+    }
+  }, []);
+
+  // تحديث أبعاد الفيديو
+  const updateVideoSizing = useCallback(() => {
+    try {
+      const v = videoRef.current;
+      if (!v) return;
+      v.style.width = "100%";
+      v.style.height = "100%";
+      v.style.objectFit = isFullscreen ? "cover" : "contain";
+      v.style.maxWidth = "100%";
+      v.style.maxHeight = "100%";
+      v.style.display = "block";
+    } catch (e) {
+      console.warn("Update video sizing error:", e);
+    }
+  }, [isFullscreen]);
+
+  // تحديث الوقت الحالي والتخزين المؤقت
+  const updateTime = useCallback(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    const now = v.currentTime || 0;
+    if (Math.abs(now - (lastRenderedTimeRef.current || 0)) > 0.2) {
+      lastRenderedTimeRef.current = now;
+      setCurrentTime(now);
+    }
+    if (!duration && v.duration) setDuration(v.duration);
+    try {
+      const b = v.buffered;
+      if (b && b.length) {
+        const end = b.end(b.length - 1);
+        const dur = duration || v.duration || 0;
+        if (dur > 0) {
+          const pct = Math.min(100, (end / dur) * 100);
+          if (Math.abs(pct - (bufferedPercent || 0)) > 1)
+            setBufferedPercent(pct);
+        }
+      }
+    } catch (e) {}
+  }, [duration, bufferedPercent]);
+
+  // تحويل الوقت إلى تنسيق مقروء
+  const formatTime = useCallback((seconds) => {
+    if (seconds == null || isNaN(seconds)) return "0:00";
+    const sec = Math.floor(seconds);
+    const hrs = Math.floor(sec / 3600);
+    const mins = Math.floor((sec % 3600) / 60);
+    const secs = sec % 60;
+    if (hrs > 0) {
+      return `${hrs}:${mins < 10 ? "0" : ""}${mins}:${secs < 10 ? "0" : ""}${secs}`;
+    }
+    return `${mins}:${secs < 10 ? "0" : ""}${secs}`;
+  }, []);
+
+  // التحقق من اتجاه شريط التقدم
+  const isProgressRtl = useCallback(() => {
+    try {
+      const el = progressRef.current;
+      if (!el) return document && document.dir === "rtl";
+      return getComputedStyle(el).direction === "rtl";
+    } catch (e) {
+      return document && document.dir === "rtl";
+    }
+  }, []);
+
+  // التعامل مع البحث في الفيديو
+  const handleSeek = useCallback((e) => {
+    if (!videoRef.current || !duration) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const rtl = isProgressRtl();
+    const x = e.clientX - rect.left;
+    let percentage = x / rect.width;
+    if (rtl) percentage = 1 - percentage;
+    const newTime = Math.max(0, Math.min(1, percentage)) * duration;
+    videoRef.current.currentTime = newTime;
+    setCurrentTime(newTime);
+  }, [duration, isProgressRtl]);
+
+  // بدء السحب على شريط التقدم
+  const handlePointerSeekStart = useCallback((e) => {
+    if (!videoRef.current || !duration) return;
+    e.preventDefault();
+    e.stopPropagation();
+    progressDragRef.current = true;
+    progressDragStartXRef.current = e.clientX || 0;
+    progressDragStartTimeRef.current = videoRef.current.currentTime || 0;
+    window.addEventListener("pointermove", handlePointerSeekMove);
+    window.addEventListener("pointerup", handlePointerSeekEnd);
+  }, [duration]);
+
+  // حركة السحب على شريط التقدم
+  const handlePointerSeekMove = useCallback((e) => {
+    if (!progressDragRef.current || !videoRef.current || !duration || !progressRef.current) return;
+    e.preventDefault();
+    const rect = progressRef.current.getBoundingClientRect();
+    const rtl = isProgressRtl();
+    let x = e.clientX - rect.left;
+    x = Math.max(0, Math.min(rect.width, x));
+    let percentage = x / rect.width;
+    if (rtl) percentage = 1 - percentage;
+    const newTime = Math.max(0, Math.min(1, percentage)) * duration;
+    videoRef.current.currentTime = newTime;
+    setCurrentTime(newTime);
+  }, [duration, isProgressRtl]);
+
+  // إنهاء السحب على شريط التقدم
+  const handlePointerSeekEnd = useCallback(() => {
+    progressDragRef.current = false;
+    progressDragStartXRef.current = 0;
+    progressDragStartTimeRef.current = 0;
+    window.removeEventListener("pointermove", handlePointerSeekMove);
+    window.removeEventListener("pointerup", handlePointerSeekEnd);
+    scheduleHideControls(1000);
+  }, [scheduleHideControls]);
+
+  // تغيير جودة الفيديو
+  const handleQualityChangePersist = useCallback((q) => {
+    try {
+      localStorage.setItem(`video-default-quality-${video._id}`, String(q));
+    } catch (e) {}
+    setCurrentQuality(q);
+    setQualityMenuOpen(false);
+  }, [video]);
+
+  // تطبيق الجودة على HLS
+  const applyQualityToHls = useCallback((hls, quality) => {
+    if (!hls || !hls.levels || !quality) return;
+    const target = RES_MAP[String(quality)];
+    if (!target) return;
+    let bestIdx = -1;
+    let bestDiff = Infinity;
+    hls.levels.forEach((lvl, idx) => {
+      const h = lvl?.height || 0;
+      const diff = Math.abs(h - target.h);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        bestIdx = idx;
+      }
+    });
+    if (bestIdx >= 0) {
+      try {
+        hls.currentLevel = bestIdx;
+        hls.autoLevelEnabled = false;
+      } catch (e) {}
+    }
+  }, []);
+
+  // التعديل على سرعة التشغيل
+  const adjustRate = useCallback((delta) => {
+    try {
+      const v = Math.round(Math.max(0.25, Math.min(3, playbackRate + delta)) * 100) / 100;
+      setPlaybackRate(v);
+      showRateFeedback(v);
+    } catch (e) {
+      console.warn("Adjust rate error:", e);
+    }
+  }, [playbackRate, showRateFeedback]);
+
+  // تحميل الفيديو
+  const handleDownload = useCallback(async () => {
+    if (isDownloading) return;
+    if (!(user?.isAdmin || user?.canDownloadVideos)) {
+      setError("فقط المشرفين والمستخدمين المسموح لهم يمكنهم التحميل");
+      return;
+    }
+    if (!currentQuality) {
+      setError("اختر جودة أولاً");
+      return;
+    }
+
+    try {
+      const userCode = localStorage.getItem("userCode");
+      const downloadUrl = `/api/videos/${video._id}/download?quality=${encodeURIComponent(currentQuality)}${userCode ? `&userCode=${encodeURIComponent(userCode)}` : ""}`;
+      
+      setIsDownloading(true);
+      setDownloadProgress(null);
+
+      const res = await api.get(downloadUrl, {
+        responseType: "blob",
+        onDownloadProgress: (ev) => {
+          try {
+            const loaded = ev.loaded || 0;
+            const total = ev.total || 0;
+            if (total > 0) {
+              const pct = Math.round((loaded / total) * 100);
+              setDownloadProgress(pct);
+            } else {
+              setDownloadProgress(null);
+            }
+          } catch (e) {}
+        },
+      });
+
+      const blob = new Blob([res.data], {
+        type: res.headers["content-type"] || "application/octet-stream",
+      });
+      const url = window.URL.createObjectURL(blob);
+      const cd = res.headers["content-disposition"] || "";
+      let filename = `${video && video.title ? video.title.replace(/[^a-z0-9\-_. ]/gi, "_") : "video"}_${currentQuality}p.ts`;
+      const m = cd.match(/filename\*=UTF-8''([^;\n\r]+)/);
+      if (m && m[1]) filename = decodeURIComponent(m[1]);
+      else {
+        const m2 = cd.match(/filename="?([^";]+)"?/);
+        if (m2 && m[1]) filename = m2[1];
+      }
+
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => window.URL.revokeObjectURL(url), 10000);
+
+      showActionFeedback(Icons.PlayArrow, "تم التحميل");
+    } catch (err) {
+      console.error("Download error:", err);
+      const msg = err?.response?.data?.message || "فشل التحميل";
+      setError(msg);
+    } finally {
+      setIsDownloading(false);
+      setTimeout(() => setDownloadProgress(null), 800);
+    }
+  }, [video, currentQuality, user, isDownloading, showActionFeedback]);
+
+  // تهيئة الفيديو و HLS
   useEffect(() => {
-    // detect small screens and watch changes
-    const m =
-      typeof window !== "undefined" && window.matchMedia
-        ? window.matchMedia("(max-width: 767px)")
-        : null;
-    const apply = () => setIsSmall(!!(m && m.matches));
-    apply();
-    if (m && m.addEventListener) m.addEventListener("change", apply);
+    if (!video || !shouldInit) return;
+
+    let HlsModule = null;
+    let hls = null;
+    let saveInt = null;
+    let rafId = null;
+
+    const initPlayer = async () => {
+      try {
+        // تحميل HLS.js ديناميكياً
+        try {
+          const mod = await import("hls.js");
+          HlsModule = mod && (mod.default || mod);
+        } catch (e) {
+          HlsModule = null;
+          console.warn("HLS.js not available:", e);
+        }
+
+        // تحديد جودة الفيديو الافتراضية
+        let defaultQuality = null;
+        try {
+          const saved = localStorage.getItem(`video-default-quality-${video._id}`);
+          if (saved && video.qualities) {
+            const qList = video.qualities.map(q => String(q.quality));
+            if (qList.includes(saved)) defaultQuality = saved;
+          }
+        } catch (e) {}
+
+        if (!defaultQuality && video.qualities && video.qualities.length > 0) {
+          defaultQuality = video.qualities[video.qualities.length - 1].quality;
+        }
+        setCurrentQuality(defaultQuality);
+
+        const playlistUrl = `/api/videos/${video._id}/playlist.m3u8${defaultQuality ? `?quality=${defaultQuality}` : ""}`;
+
+        if (HlsModule && HlsModule.isSupported && videoRef.current) {
+          hls = new HlsModule({
+            enableWorker: true,
+            lowLatencyMode: false,
+            maxBufferLength: 15,
+            backBufferLength: 10,
+            xhrSetup: (xhr, url) => {
+              xhr.withCredentials = false;
+            },
+          });
+
+          hlsRef.current = hls;
+
+          hls.on(HlsModule.Events.MANIFEST_PARSED, () => {
+            setLoading(false);
+            safePlay();
+          });
+
+          hls.on(HlsModule.Events.ERROR, (event, data) => {
+            console.warn("HLS error:", data);
+            if (data.fatal) {
+              switch (data.type) {
+                case HlsModule.ErrorTypes.NETWORK_ERROR:
+                  setError("خطأ في الشبكة");
+                  break;
+                case HlsModule.ErrorTypes.MEDIA_ERROR:
+                  setError("خطأ في الوسائط");
+                  break;
+                default:
+                  setError("خطأ غير معروف");
+                  break;
+              }
+              setLoading(false);
+            }
+          });
+
+          hls.loadSource(playlistUrl);
+          hls.attachMedia(videoRef.current);
+        } else if (videoRef.current) {
+          videoRef.current.src = playlistUrl;
+          videoRef.current.addEventListener("loadedmetadata", () => {
+            setLoading(false);
+            const serverDuration = (video && Number(video.duration)) || 0;
+            if (serverDuration > 0) setDuration(serverDuration);
+            else setDuration(videoRef.current.duration || 0);
+          });
+          videoRef.current.addEventListener("error", () => {
+            setError("فشل التشغيل");
+            setLoading(false);
+          });
+        }
+
+        // حلقة تحديث سلسة
+        let lastRafTs = 0;
+        const rafLoop = (ts) => {
+          if (!videoRef.current) return;
+          if (!lastRafTs || ts - lastRafTs > 250) {
+            updateTime();
+            lastRafTs = ts;
+          }
+          rafId = requestAnimationFrame(rafLoop);
+        };
+        rafId = requestAnimationFrame(rafLoop);
+        
+        // إضافة مستمع timeupdate - يجب استخدام نفس الدالة
+        const timeUpdateHandler = () => updateTime();
+        if (videoRef.current) {
+          videoRef.current.addEventListener("timeupdate", timeUpdateHandler);
+        }
+
+        // استئناف موضع التشغيل المحفوظ
+        try {
+          const saved = localStorage.getItem(`video-pos-${video._id}`);
+          if (saved) {
+            const t = parseFloat(saved);
+            if (!isNaN(t) && videoRef.current) {
+              videoRef.current.currentTime = t;
+              updateTime();
+            }
+          }
+        } catch (e) {}
+
+        // حفظ الموضع كل 5 ثوان
+        saveInt = setInterval(() => {
+          try {
+            if (videoRef.current && !isNaN(videoRef.current.currentTime)) {
+              localStorage.setItem(
+                `video-pos-${video._id}`,
+                String(videoRef.current.currentTime),
+              );
+            }
+          } catch (e) {}
+        }, 5000);
+
+        // تطبيق مستوى الصوت وسرعة التشغيل
+        try {
+          if (videoRef.current) {
+            videoRef.current.volume = volume;
+            videoRef.current.playbackRate = playbackRate;
+          }
+        } catch (e) {}
+
+        // إخفاء عناصر التحكم بعد 3 ثوان
+        scheduleHideControls(3000);
+      } catch (err) {
+        console.error("Initialization error:", err);
+        setError("خطأ في تهيئة المشغل");
+        setLoading(false);
+      }
+    };
+
+    initPlayer();
+
+    // التنظيف
     return () => {
-      if (m && m.removeEventListener) m.removeEventListener("change", apply);
+      if (hls) {
+        try {
+          hls.destroy();
+        } catch (e) {}
+      }
+      if (videoRef.current) {
+        videoRef.current.pause();
+        videoRef.current.removeAttribute("src");
+        try {
+          videoRef.current.load();
+        } catch (e) {}
+      }
+      if (saveInt) clearInterval(saveInt);
+      if (rafId) cancelAnimationFrame(rafId);
+      clearHideControls();
+      
+      // إزالة مستمع timeupdate - باستخدام نفس المتغير
+      const timeUpdateHandler = () => updateTime();
+      if (videoRef.current) {
+        videoRef.current.removeEventListener("timeupdate", timeUpdateHandler);
+      }
+    };
+  }, [video, shouldInit, safePlay, clearHideControls, scheduleHideControls, volume, playbackRate, updateTime]);
+
+  // التحكم في إظهار/إخفاء عناصر التحكم
+  useEffect(() => {
+    if (showControls) {
+      scheduleHideControls(3000);
+    } else {
+      clearHideControls();
+    }
+    return () => clearHideControls();
+  }, [showControls, qualityMenuOpen, speedMenuOpen, settingsMenuOpen, scheduleHideControls, clearHideControls]);
+
+  // مزامنة مستوى الصوت
+  useEffect(() => {
+    try {
+      if (videoRef.current) videoRef.current.volume = volume;
+      localStorage.setItem("video-volume", String(volume));
+      if (volume > 0) prevVolumeRef.current = volume;
+    } catch (e) {
+      console.warn("Volume sync error:", e);
+    }
+  }, [volume]);
+
+  // مزامنة سرعة التشغيل
+  useEffect(() => {
+    try {
+      if (videoRef.current) videoRef.current.playbackRate = playbackRate;
+      localStorage.setItem("video-rate", String(playbackRate));
+    } catch (e) {
+      console.warn("Playback rate sync error:", e);
+    }
+  }, [playbackRate]);
+
+  // اختصارات لوحة المفاتيح
+  useEffect(() => {
+    const onKey = (e) => {
+      if (!videoRef.current) return;
+      const v = videoRef.current;
+      
+      switch (e.code) {
+        case "Space":
+          e.preventDefault();
+          togglePlayPause();
+          showActionFeedback(isPlaying ? Icons.PauseCircle : Icons.PlayArrow, isPlaying ? "إيقاف" : "تشغيل");
+          break;
+        case "ArrowRight":
+          e.preventDefault();
+          v.currentTime = Math.min(v.duration || 0, v.currentTime + 5);
+          setCurrentTime(v.currentTime);
+          showActionFeedback(Icons.Forward10, "+5s");
+          break;
+        case "ArrowLeft":
+          e.preventDefault();
+          v.currentTime = Math.max(0, v.currentTime - 5);
+          setCurrentTime(v.currentTime);
+          showActionFeedback(Icons.Replay10, "-5s");
+          break;
+        case "ArrowUp":
+          e.preventDefault();
+          const upVol = Math.min(1, Math.round((v.volume + 0.05) * 100) / 100);
+          v.volume = upVol;
+          setVolume(upVol);
+          break;
+        case "ArrowDown":
+          e.preventDefault();
+          const downVol = Math.max(0, Math.round((v.volume - 0.05) * 100) / 100);
+          v.volume = downVol;
+          setVolume(downVol);
+          break;
+        case "KeyF":
+          e.preventDefault();
+          toggleFullscreen();
+          break;
+        case "KeyM":
+          e.preventDefault();
+          if (v.volume > 0) {
+            prevVolumeRef.current = v.volume;
+            setVolume(0);
+          } else {
+            const restore = prevVolumeRef.current > 0 ? prevVolumeRef.current : 1;
+            setVolume(restore);
+          }
+          break;
+        case "Escape":
+          if (document.fullscreenElement) {
+            e.preventDefault();
+            toggleFullscreen();
+          }
+          break;
+      }
+      
+      setShowControls(true);
+      scheduleHideControls(3000);
+    };
+
+    window.addEventListener("keydown", onKey);
+
+    // استجابة لتغيير وضع ملء الشاشة
+    const handleFullscreenChange = () => {
+      const isFs = !!document.fullscreenElement;
+      setIsFullscreen(isFs);
+      setShowControls(true);
+      clearHideControls();
+      if (!isFs) {
+        setTimeout(updateVideoSizing, 100);
+        scheduleHideControls(3000);
+      }
+    };
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+
+    // Media Session API
+    if ("mediaSession" in navigator && video) {
+      try {
+        navigator.mediaSession.metadata = new window.MediaMetadata({
+          title: video.title || "Lecture",
+          artist: video.instructor?.name || "",
+        });
+        navigator.mediaSession.setActionHandler("play", () => {
+          safePlay();
+          setShowControls(true);
+        });
+        navigator.mediaSession.setActionHandler("pause", () => {
+          videoRef.current && videoRef.current.pause();
+          setShowControls(true);
+        });
+        navigator.mediaSession.setActionHandler("seekbackward", (details) => {
+          const skip = (details && details.seekOffset) || 10;
+          if (videoRef.current) {
+            videoRef.current.currentTime = Math.max(0, videoRef.current.currentTime - skip);
+            setCurrentTime(videoRef.current.currentTime);
+          }
+        });
+        navigator.mediaSession.setActionHandler("seekforward", (details) => {
+          const skip = (details && details.seekOffset) || 10;
+          if (videoRef.current) {
+            videoRef.current.currentTime = Math.min(videoRef.current.duration || 0, videoRef.current.currentTime + skip);
+            setCurrentTime(videoRef.current.currentTime);
+          }
+        });
+      } catch (e) {}
+    }
+
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
+    };
+  }, [video, togglePlayPause, toggleFullscreen, safePlay, scheduleHideControls, showActionFeedback, isPlaying]);
+
+  // مزامنة حالة التشغيل
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    const onPlay = () => setIsPlaying(true);
+    const onPause = () => setIsPlaying(false);
+    v.addEventListener("play", onPlay);
+    v.addEventListener("pause", onPause);
+    return () => {
+      v.removeEventListener("play", onPlay);
+      v.removeEventListener("pause", onPause);
     };
   }, []);
 
-  // admin stats via react-query
-  const { data: adminTotals } = useQuery({
-    queryKey: ["adminStats"],
-    queryFn: async () => {
-      const res = await adminAPI.getStats();
-      return res.data?.totals || {};
-    },
-    staleTime: 60_000,
-    cacheTime: 5 * 60_000,
-  });
-
+  // إغلاق القوائم عند النقر خارجها
   useEffect(() => {
-    if (adminTotals && typeof adminTotals.instructors !== "undefined")
-      setInstructorsTotal(adminTotals.instructors);
-  }, [adminTotals]);
+    const onDocClick = (e) => {
+      if (qualityMenuOpen && qualityRef.current && !qualityRef.current.contains(e.target)) {
+        setQualityMenuOpen(false);
+      }
+      if (speedMenuOpen && speedRef.current && !speedRef.current.contains(e.target)) {
+        setSpeedMenuOpen(false);
+      }
+      if (settingsMenuOpen && settingsRef.current && !settingsRef.current.contains(e.target)) {
+        setSettingsMenuOpen(false);
+      }
+    };
+    const onEsc = (e) => {
+      if (e.key === "Escape") {
+        setQualityMenuOpen(false);
+        setSpeedMenuOpen(false);
+        setSettingsMenuOpen(false);
+      }
+    };
+    document.addEventListener("click", onDocClick);
+    document.addEventListener("keydown", onEsc);
+    return () => {
+      document.removeEventListener("click", onDocClick);
+      document.removeEventListener("keydown", onEsc);
+    };
+  }, [qualityMenuOpen, speedMenuOpen, settingsMenuOpen]);
 
-  // when materials arrive and not small, prefetch instructor counts into react-query cache
+  // تحديث أبعاد الفيديو عند تغيير الجودة أو وضع ملء الشاشة
   useEffect(() => {
-    if (materials && materials.length) {
-      // prefetch in limited concurrency using queryClient.fetchQuery
-      (async () => {
-        const concurrency = 6;
-        for (let i = 0; i < materials.length; i += concurrency) {
-          const chunk = materials.slice(i, i + concurrency);
-          try {
-            const results = await Promise.all(
-              chunk.map((m) =>
-                queryClient.fetchQuery({
-                  queryKey: ["instructors", m._id],
-                  queryFn: async () => {
-                    const r = await instructorAPI.getInstructorsByMaterial(m._id);
-                    return Array.isArray(r.data)
-                      ? r.data.length
-                      : (r.data && r.data.count) || 0;
-                  },
-                  staleTime: 60_000,
-                  cacheTime: 5 * 60_000,
-                }),
-              ),
-            );
-
-            const map = {};
-            for (let j = 0; j < chunk.length; j++) {
-              map[chunk[j]._id] = results[j] || 0;
-            }
-            setInstructorCounts((prev) => ({ ...prev, ...map }));
-          } catch (err) {
-            // ignore per-chunk errors
-          }
-        }
-      })();
+    updateVideoSizing();
+    if (hlsRef.current && currentQuality) {
+      applyQualityToHls(hlsRef.current, currentQuality);
     }
-  }, [materials, queryClient]);
+  }, [currentQuality, isFullscreen, updateVideoSizing, applyQualityToHls]);
 
-  // Keep the instructorCounts state as a small layer for UI that may need immediate values
-  // (we also keep counts in react-query cache via fetchQuery above)
+  // تحديث أبعاد الفيديو عند تغيير حجم النافذة
+  useEffect(() => {
+    const handleResize = () => {
+      updateVideoSizing();
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [updateVideoSizing]);
 
-  // On-demand fetch for a single material (used on small screens)
-  const handleFetchCount = useCallback(
-    async (materialId) => {
-      if (!materialId) return;
-      if (typeof instructorCounts[materialId] !== "undefined") return;
-      try {
-        const count = await queryClient.fetchQuery({
-          queryKey: ["instructors", materialId],
-          queryFn: async () => {
-            const res =
-              await instructorAPI.getInstructorsByMaterial(materialId);
-            return Array.isArray(res.data)
-              ? res.data.length
-              : (res.data && res.data.count) || 0;
-          },
-          staleTime: 60_000,
-          cacheTime: 5 * 60_000,
-        });
-        setInstructorCounts((prev) => ({ ...prev, [materialId]: count }));
-      } catch (e) {
-        setInstructorCounts((prev) => ({ ...prev, [materialId]: 0 }));
-      }
-    },
-    [instructorCounts, queryClient],
-  );
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (!formData.title.trim()) return;
-
-    try {
-      // If thumbnail is a File (selected from input), upload via FormData endpoint
-      if (
-        formData.thumbnail &&
-        typeof formData.thumbnail === "object" &&
-        formData.thumbnail instanceof File
-      ) {
-        const result = await uploadFile(formData.thumbnail, {
-          title: formData.title,
-          order: 0,
-        });
-        if (result) {
-          setFormData({ title: "", thumbnail: "" });
-          setShowForm(false);
-          await queryClient.invalidateQueries(["materials"]);
-        }
-      } else {
-        // thumbnail is probably a URL (string) or empty
-        await materialAPI.createMaterial(
-          formData.title,
-          formData.thumbnail || null,
-          0,
-        );
-        setFormData({ title: "", thumbnail: "" });
-        setShowForm(false);
-        await queryClient.invalidateQueries(["materials"]);
-      }
-    } catch (error) {
-      // Error creating material (handled by UI)
-    }
+  // أيقونات SVG
+  const Icons = {
+    Play: () => (
+      <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M8 5V19L19 12L8 5Z" />
+      </svg>
+    ),
+    Replay10: () => (
+      <svg className="w-5 h-5 sm:w-6 sm:h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
+        <circle cx="12" cy="12" r="9" strokeWidth="1.4" fill="none" />
+        <path d="M8.5 9.5L5.5 12L8.5 14.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+        <path d="M9.5 7.5A6 6 0 0 1 17 12" strokeLinecap="round" fill="none" strokeWidth="1.4" />
+      </svg>
+    ),
+    Pause: () => (
+      <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
+        <rect x="6" y="5" width="4" height="14" />
+        <rect x="14" y="5" width="4" height="14" />
+      </svg>
+    ),
+    Forward10: () => (
+      <svg className="w-5 h-5 sm:w-6 sm:h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
+        <circle cx="12" cy="12" r="9" strokeWidth="1.4" fill="none" />
+        <path d="M15.5 9.5L18.5 12L15.5 14.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+        <path d="M14.5 7.5A6 6 0 0 0 7 12" strokeLinecap="round" fill="none" strokeWidth="1.4" />
+      </svg>
+    ),
+    Settings: () => (
+      <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M12 15.5C13.93 15.5 15.5 13.93 15.5 12C15.5 10.07 13.93 8.5 12 8.5C10.07 8.5 8.5 10.07 8.5 12C8.5 13.93 10.07 15.5 12 15.5Z" />
+        <path d="M19.43 12.97C19.47 12.65 19.5 12.33 19.5 12C19.5 11.67 19.47 11.34 19.43 11.01L21.54 9.37C21.73 9.22 21.78 8.95 21.66 8.73L19.66 5.27C19.54 5.05 19.27 4.96 19.05 5.05L16.56 6.05C16.04 5.66 15.5 5.32 14.87 5.07L14.5 2.42C14.46 2.18 14.25 2 14 2H10C9.75 2 9.54 2.18 9.5 2.42L9.13 5.07C8.5 5.32 7.96 5.66 7.44 6.05L4.95 5.05C4.73 4.96 4.46 5.05 4.34 5.27L2.34 8.73C2.22 8.95 2.27 9.22 2.46 9.37L4.57 11.01C4.53 11.34 4.5 11.67 4.5 12C4.5 12.33 4.53 12.65 4.57 12.97L2.46 14.63C2.27 14.78 2.22 15.05 2.34 15.27L4.34 18.73C4.46 18.95 4.73 19.03 4.95 18.95L7.44 17.94C7.96 18.34 8.5 18.68 9.13 18.93L9.5 21.58C9.54 21.82 9.75 22 10 22H14C14.25 22 14.46 21.82 14.5 21.58L14.87 18.93C15.5 18.68 16.04 18.34 16.56 17.94L19.05 18.95C19.27 19.03 19.54 18.95 19.66 18.73L21.66 15.27C21.78 15.05 21.73 14.78 21.54 14.63L19.43 12.97Z" />
+      </svg>
+    ),
+    VolumeOff: () => (
+      <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M16.5 12C16.5 10.23 15.48 8.71 14 7.97V10.18L16.45 12.63C16.48 12.43 16.5 12.22 16.5 12Z" />
+        <path d="M19 12C19 12.94 18.8 13.82 18.46 14.64L19.97 16.15C20.62 14.91 21 13.5 21 12C21 7.72 18.01 4.14 14 3.23V5.29C16.89 6.15 19 8.83 19 12Z" />
+        <path d="M4.27 3L3 4.27L7.73 9H3V15H7L12 20V13.27L16.25 17.52C15.58 18.04 14.83 18.46 14 18.7V20.77C15.38 20.45 16.63 19.82 17.68 18.93L19.73 21L21 19.73L12 10.73L4.27 3Z" />
+      </svg>
+    ),
+    VolumeLow: () => (
+      <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M7 9V15H11L16 20V4L11 9H7Z" />
+      </svg>
+    ),
+    VolumeHigh: () => (
+      <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M3 9V15H7L12 20V4L7 9H3Z" />
+        <path d="M16.5 12C16.5 10.23 15.48 8.71 14 7.97V16.02C15.48 15.29 16.5 13.77 16.5 12Z" />
+        <path d="M14 3.23V5.29C16.89 6.15 19 8.83 19 12C19 15.17 16.89 17.85 14 18.71V20.77C18.01 19.86 21 16.28 21 12C21 7.72 18.01 4.14 14 3.23Z" />
+      </svg>
+    ),
+    Fullscreen: () => (
+      <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M7 14H5V19H10V17H7V14Z" />
+        <path d="M5 10H7V7H10V5H5V10Z" />
+        <path d="M17 17H14V19H19V14H17V17Z" />
+        <path d="M14 5V7H17V10H19V5H14Z" />
+      </svg>
+    ),
+    FullscreenExit: () => (
+      <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M5 16H8V19H10V14H5V16Z" />
+        <path d="M8 8H5V10H10V5H8V8Z" />
+        <path d="M14 19H16V16H19V14H14V19Z" />
+        <path d="M16 8V5H14V10H19V8H16Z" />
+      </svg>
+    ),
+    Quality: () => (
+      <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M19 4H5C3.89 4 3 4.9 3 6V18C3 19.1 3.89 20 5 20H19C20.1 20 21 19.1 21 18V6C21 4.9 20.11 4 19 4ZM19 18H5V6H19V18Z" />
+        <path d="M7.5 13.5H9.5V15H7.5V13.5Z" />
+        <path d="M11.5 13.5H13.5V15H11.5V13.5Z" />
+        <path d="M15.5 13.5H17.5V15H15.5V13.5Z" />
+      </svg>
+    ),
+    Speed: () => (
+      <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M20.38 8.57L13.92 2.2C13.72 2.07 13.56 2 13.3 2H6.5C5.67 2 5 2.67 5 3.5V20.5C5 21.33 5.67 22 6.5 22H17.5C18.33 22 19 21.33 19 20.5V9.3C19 9.04 18.93 8.78 18.7 8.58L20.38 8.57Z" />
+        <path d="M12 17.5C10.07 17.5 8.5 15.93 8.5 14C8.5 12.07 10.07 10.5 12 10.5C13.93 10.5 15.5 12.07 15.5 14C15.5 15.93 13.93 17.5 12 17.5Z" />
+      </svg>
+    ),
+    ChevronDown: () => (
+      <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M7.41 8.59L12 13.17L16.59 8.59L18 10L12 16L6 10L7.41 8.59Z" />
+      </svg>
+    ),
+    PlayArrow: () => (
+      <svg className="w-8 h-8 sm:w-10 sm:h-10" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M8 5V19L19 12L8 5Z" />
+      </svg>
+    ),
+    PauseCircle: () => (
+      <svg className="w-8 h-8 sm:w-10 sm:h-10" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M9 16H11V8H9V16ZM13 8V16H15V8H13ZM12 2C6.48 2 2 6.48 2 12C2 17.52 6.48 22 12 22C17.52 22 22 17.52 22 12C22 6.48 17.52 2 12 2ZM12 20C7.59 20 4 16.41 4 12C4 7.59 7.59 4 12 4C16.41 4 20 7.59 20 12C20 16.41 16.41 20 12 20Z" />
+      </svg>
+    ),
   };
 
-  const breadcrumbs = [{ label: "المواد", path: "/admin/content/materials" }];
+  const progressPct = duration ? (currentTime / duration) * 100 : 0;
 
   return (
-    <div className="min-h-screen p-4 md:p-6">
-      {/* Background Effects - hidden on small screens to avoid overlap */}
-      <div className="fixed inset-0 overflow-hidden pointer-events-none hidden sm:block">
-        <div className="absolute top-20 left-1/4 w-96 h-96 bg-blue-500/10 rounded-full blur-3xl" />
-        <div className="absolute bottom-20 right-1/4 w-96 h-96 bg-purple-500/10 rounded-full blur-3xl" />
-      </div>
+    <div className="space-y-2 relative">
+      <div
+        className={`relative w-full bg-gradient-to-br from-gray-900 to-black rounded-xl overflow-hidden 
+          ${isFullscreen ? "fixed inset-0 z-50 rounded-none" : "aspect-video max-h-[70vh] shadow-lg"}`}
+        ref={containerRef}
+        onMouseMove={() => {
+          setShowControls(true);
+          scheduleHideControls(3000);
+        }}
+        onMouseLeave={() => {
+          if (hideControlsTimeoutRef.current) clearTimeout(hideControlsTimeoutRef.current);
+          hideControlsTimeoutRef.current = setTimeout(() => setShowControls(false), 3000);
+        }}
+      >
+        <video
+          ref={videoRef}
+          controls={false}
+          poster={
+            video?.poster ||
+            video?.thumbnail?.lqip ||
+            video?.thumbnail?.small ||
+            ""
+          }
+          playsInline
+          preload="metadata"
+          onWaiting={() => setLoading(true)}
+          onCanPlay={() => setLoading(false)}
+          onCanPlayThrough={() => setLoading(false)}
+          onLoadedMetadata={(e) => {
+            try {
+              const d = e?.target?.duration;
+              if ((!duration || duration === 0) && d && d > 0) setDuration(d);
+              setLoading(false);
+            } catch (err) {}
+          }}
+        ></video>
 
-      <div className="relative z-10">
-        <AdminBreadcrumb items={breadcrumbs} className="mb-3 -mt-2" />
+        {/* مؤشر التحميل */}
+        {loading && (
+          <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/50">
+            <div className="flex flex-col items-center gap-2">
+              <svg className="w-12 h-12 text-white animate-spin" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+              </svg>
+              <div className="text-white/90 text-sm">جارٍ التحميل...</div>
+            </div>
+          </div>
+        )}
 
-        {/* Header */}
-        <div className="admin-card p-2 md:p-8 mb-8 bg-gradient-to-r from-gray-800/60 via-gray-900/60 to-gray-800/60 backdrop-blur-xl border border-white/10 rounded-3xl shadow-2xl">
-          <div className="flex flex-col md:flex-row items-center justify-between">
-            <div>
-              <h1 className="text-3xl font-bold bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-500 bg-clip-text text-transparent">
-                إدارة المواد 
-              </h1>
+        {/* ردود الفعل المرئية */}
+        {actionFeedback.visible && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-40">
+            <div className="flex flex-col items-center gap-2 bg-black/40 text-white/95 px-4 py-3 rounded-xl backdrop-blur-sm">
+              <div className="text-3xl">{actionFeedback.icon ? actionFeedback.icon() : null}</div>
+              <div className="text-sm font-medium">{actionFeedback.text}</div>
+            </div>
+          </div>
+        )}
+
+        {seekFeedback.visible && !actionFeedback.visible && (
+          <div className={`absolute top-1/2 transform -translate-y-1/2 ${seekFeedback.type === "forward" ? "right-6" : "left-6"} pointer-events-none z-40`}>
+            <div className="flex flex-col items-center gap-2 bg-black/40 text-white/95 px-3 py-2 rounded-xl backdrop-blur-sm">
+              <div className="text-2xl">
+                {seekFeedback.type === "forward" ? <Icons.Forward10 /> : <Icons.Replay10 />}
+              </div>
+              <div className="text-sm font-medium">{seekFeedback.time}</div>
+            </div>
+          </div>
+        )}
+
+        {rateFeedback.visible && !actionFeedback.visible && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-40">
+            <div className="flex flex-col items-center gap-2 bg-black/40 text-white/95 px-4 py-3 rounded-xl backdrop-blur-sm">
+              <div className="text-2xl font-semibold">{rateFeedback.rate}x</div>
+            </div>
+          </div>
+        )}
+
+        {/* تقدم التحميل */}
+        {isDownloading && downloadProgress != null && (
+          <div className="absolute left-1/2 -translate-x-1/2 bottom-4 z-40 pointer-events-none w-2/5">
+            <div className="w-full h-2 bg-white/20 rounded-full overflow-hidden shadow-inner">
+              <div
+                className="h-full bg-cyan-500 transition-all"
+                style={{ width: `${downloadProgress}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* رسالة الخطأ */}
+        {error && (
+          <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-black/90 to-gray-900/90 backdrop-blur-md">
+            <div className="text-center p-8 bg-gradient-to-br from-gray-900 to-black rounded-2xl max-w-sm border border-white/10 shadow-2xl">
+              <div className="text-red-400 text-xl mb-4 font-semibold flex items-center justify-center gap-2">
+                <span className="text-2xl">⚠️</span> {error}
+              </div>
+              <button
+                onClick={retryPlayback}
+                className="px-6 py-3 bg-gradient-to-r from-red-600 to-red-700 text-white rounded-xl transition duration-150 shadow-lg active:scale-95 font-medium"
+              >
+                إعادة المحاولة
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* عناصر التحكم المركزية */}
+        {showControls && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-50">
+            <div className="flex items-center gap-3 sm:gap-4 md:gap-6 pointer-events-auto">
+              <button
+                type="button"
+                aria-label="تأخير 5 ث"
+                onClick={() => {
+                  const v = videoRef.current;
+                  if (!v) return;
+                  v.currentTime = Math.max(0, (v.currentTime || 0) - 5);
+                  setCurrentTime(v.currentTime);
+                  showActionFeedback(Icons.Replay10, "-5s");
+                }}
+                className="flex items-center justify-center w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-black/60 text-white shadow-lg transition-transform hover:scale-110"
+              >
+                <Icons.Replay10 />
+              </button>
+
+              <button
+                type="button"
+                aria-label={isPlaying ? "إيقاف" : "تشغيل"}
+                onClick={togglePlayPause}
+                className="flex items-center justify-center w-16 h-16 md:w-20 md:h-20 rounded-full bg-gradient-to-br from-red-600 to-red-700 text-white shadow-2xl transition-transform hover:scale-110"
+              >
+                {isPlaying ? <Icons.PauseCircle /> : <Icons.PlayArrow />}
+              </button>
+
+              <button
+                type="button"
+                aria-label="تقديم 5 ث"
+                onClick={() => {
+                  const v = videoRef.current;
+                  if (!v) return;
+                  v.currentTime = Math.min((v.duration || 0), (v.currentTime || 0) + 5);
+                  setCurrentTime(v.currentTime);
+                  showActionFeedback(Icons.Forward10, "+5s");
+                }}
+                className="flex items-center justify-center w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-black/60 text-white shadow-lg transition-transform hover:scale-110"
+              >
+                <Icons.Forward10 />
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* شريط التقدم */}
+        <div
+          className={`absolute left-0 right-0 bottom-16 px-2 transition-opacity duration-200 z-50 bg-black/20 backdrop-blur-sm rounded-md ${showControls ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"}`}
+        >
+          <div className="flex items-center gap-3">
+            <div className="text-white/90 font-medium text-sm">
+              <span className="bg-black/30 px-2 py-1 rounded-md">
+                {formatTime(currentTime)}
+              </span>
+              <span className="text-white/70 ml-2">/ {formatTime(duration)}</span>
             </div>
 
-            <div className="flex items-center gap-4 bg-gray-900/40 backdrop-blur-sm rounded-2xl p-4 border border-white/10">
-              <div className="text-center px-4">
-                <div className="text-3xl font-bold bg-gradient-to-r from-emerald-400 to-teal-400 bg-clip-text text-transparent">
-                  {materials.length}
-                </div>
-                <div className="text-sm text-white/70">المواد</div>
-              </div>
-              <div className="h-10 w-px bg-white/10"></div>
-              <div className="text-center px-4">
-                <div className="text-3xl font-bold bg-gradient-to-r from-cyan-400 to-blue-400 bg-clip-text text-transparent">
-                  {instructorsTotal}
-                </div>
-                <div className="text-sm text-white/70">المدرسين</div>
+            <div className="flex-1">
+              <div
+                role="slider"
+                aria-label="شريط التقدم"
+                aria-valuemin={0}
+                aria-valuemax={duration || 0}
+                aria-valuenow={currentTime}
+                tabIndex={0}
+                ref={progressRef}
+                className={`relative cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 h-3 sm:h-2 bg-gradient-to-r from-gray-800/60 to-gray-800/30 rounded-full shadow-inner`}
+                onClick={handleSeek}
+                onMouseDown={handlePointerSeekStart}
+                onMouseEnter={() => setHoverProgress(true)}
+                onMouseLeave={() => setHoverProgress(false)}
+                onKeyDown={(e) => {
+                  if (!duration || !videoRef.current) return;
+                  switch (e.key) {
+                    case "ArrowRight":
+                      e.preventDefault();
+                      videoRef.current.currentTime = Math.min(duration, videoRef.current.currentTime + 5);
+                      setCurrentTime(videoRef.current.currentTime);
+                      break;
+                    case "ArrowLeft":
+                      e.preventDefault();
+                      videoRef.current.currentTime = Math.max(0, videoRef.current.currentTime - 5);
+                      setCurrentTime(videoRef.current.currentTime);
+                      break;
+                    case "Home":
+                      e.preventDefault();
+                      videoRef.current.currentTime = 0;
+                      setCurrentTime(0);
+                      break;
+                    case "End":
+                      e.preventDefault();
+                      videoRef.current.currentTime = duration;
+                      setCurrentTime(duration);
+                      break;
+                  }
+                }}
+              >
+                <div
+                  className="absolute top-0 h-full bg-gradient-to-r from-gray-400/40 to-gray-300/40 rounded-full"
+                  style={{
+                    [isProgressRtl() ? "right" : "left"]: 0,
+                    width: `${bufferedPercent || 0}%`,
+                    zIndex: 0,
+                  }}
+                />
+
+                <div
+                  className={`absolute top-0 h-full rounded-full relative shadow-lg ${hoverProgress ? "bg-gradient-to-r from-cyan-400 via-cyan-500 to-cyan-600" : "bg-gradient-to-r from-red-500 via-red-600 to-red-700"}`}
+                  style={{
+                    [isProgressRtl() ? "right" : "left"]: 0,
+                    width: `${progressPct}%`,
+                    zIndex: 1,
+                  }}
+                />
+
+                <div
+                  className={`absolute top-1/2 -translate-y-1/2 cursor-pointer transition duration-150 rounded-full bg-white border-3 ${hoverProgress ? "border-cyan-400" : "border-red-600"} shadow-xl`}
+                  style={{
+                    [isProgressRtl() ? "right" : "left"]: `${progressPct}%`,
+                    transform: isProgressRtl() ? "translate(50%, -50%)" : "translate(-50%, -50%)",
+                    zIndex: 2,
+                    width: "0.9rem",
+                    height: "0.9rem",
+                  }}
+                  aria-hidden
+                />
               </div>
             </div>
           </div>
         </div>
 
-        {/* Materials Grid with Enhanced Design */}
-        <div className="space-y-8">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-2xl font-bold text-white mb-2">
-                المكتبة التعليمية
-              </h2>
-              <p className="text-white/60">
-                جميع المواد التعليمية المتاحة ({materials.length})
-              </p>
-            </div>
-          </div>
+        {/* زر ملء الشاشة */}
+        <div className={`absolute left-4 bottom-6 z-[9999] transition-opacity duration-200 ${showControls ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"}`}>
+          <button
+            type="button"
+            onClick={toggleFullscreen}
+            className="flex items-center justify-center rounded-full bg-gradient-to-br from-gray-900/80 to-black/80 text-white min-w-[36px] h-8 sm:min-w-[44px] sm:h-11 sm:w-10 shadow-lg transition-transform hover:scale-105 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 hover:bg-white/10 p-1"
+            aria-label={isFullscreen ? "خروج من ملء الشاشة" : "ملء الشاشة"}
+          >
+            {isFullscreen ? <Icons.FullscreenExit /> : <Icons.Fullscreen />}
+          </button>
+        </div>
 
-          {loading ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-              {[...Array(4)].map((_, i) => (
-                <div
-                  key={i}
-                  className="p-6 rounded-2xl bg-gradient-to-r from-gray-800/40 to-gray-900/40 backdrop-blur-sm border border-white/10 animate-pulse"
-                >
-                  <div className="flex gap-6">
-                    <div className="w-32 h-32 bg-gray-700 rounded-xl flex-shrink-0"></div>
-                    <div className="flex-1">
-                      <div className="h-8 bg-gray-700 rounded mb-4 w-3/4"></div>
-                      <div className="h-4 bg-gray-700 rounded w-1/2"></div>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-6">
-              {/* Existing Materials in Card Layout (Image Right, Content Left) */}
-              {materials.map((material) => (
-                <Link
-                  key={material._id}
-                  to={`/admin/content/materials/${material._id}`}
-                  className="group relative block w-full focus:outline-none"
-                  onMouseEnter={() => setHoveredCard(material._id)}
-                  onMouseLeave={() => setHoveredCard(null)}
-                >
-                  <div className={`absolute inset-0 bg-gradient-to-r from-cyan-500/10 via-blue-500/10 to-purple-500/10 rounded-2xl blur-xl transition-opacity duration-500 ${hoveredCard === material._id ? "opacity-100" : "opacity-0"}`} />
-
-                  <div className="relative bg-gradient-to-r from-gray-800/40 to-gray-900/40 backdrop-blur-sm border border-white/10 rounded-2xl p-3 md:p-4 hover:border-cyan-500/30 hover:shadow-2xl hover:shadow-cyan-500/10 transition-transform duration-300 w-full min-h-[220px]">
-                    <div className="flex flex-col gap-4 items-start">
-                      <div className="w-full h-36 flex-shrink-0 rounded-xl overflow-hidden border-2 border-white/10 transition-colors duration-300 mx-auto relative">
-                        {material.thumbnailUrl || material.thumbnail ? (
-                          <img
-                            src={material.thumbnailUrl || material.thumbnail}
-                            alt={material.title}
-                            className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
-                            loading="lazy"
-                            decoding="async"
-                          />
-                        ) : (
-                          <div className="w-full h-full bg-gradient-to-br from-gray-700 to-gray-900 flex flex-col items-center justify-center">
-                            <svg className="w-10 h-10 text-white/30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                            </svg>
-                            <span className="text-xs text-white/40 mt-2">لا توجد صورة</span>
-                          </div>
-                        )}
-
-                        {/* Overlay badges: instructors count (left) and created date (right) */}
-                        <div className="absolute left-3 top-3">
-                          <span
-                            onClick={async (e) => {
-                              e.stopPropagation();
-                              if (isSmall) await handleFetchCount(material._id);
-                            }}
-                            className={`inline-flex items-center gap-1 bg-black/50 text-white text-xs px-2 py-1 rounded-full backdrop-blur-sm select-none ${isSmall ? "cursor-pointer underline" : ""}`}
-                            title={isSmall ? `اضغط لجلب عدد المدرسين` : `عدد المدرسين`}
-                            role="button"
-                            aria-pressed="false"
-                          >
-                            <svg className="w-3 h-3 text-white/90" fill="currentColor" viewBox="0 0 20 20" aria-hidden>
-                              <path d="M13 7a3 3 0 11-6 0 3 3 0 016 0z" />
-                              <path fillRule="evenodd" d="M2 13.5A6.5 6.5 0 0110 7a6.5 6.5 0 018 6.5v1H2v-1z" clipRule="evenodd" />
-                            </svg>
-                            <strong className="font-semibold">{typeof instructorCounts[material._id] !== "undefined" ? instructorCounts[material._id] : (isSmall ? "..." : 0)}</strong>
-                            <span className="text-white/80">مدرس</span>
-                          </span>
-                        </div>
-
-                        <div className="absolute right-3 top-3">
-                          <span className="inline-flex items-center gap-1 bg-black/40 text-white text-xs px-2 py-1 rounded-full backdrop-blur-sm">
-                            <svg className="w-3 h-3 text-white/90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                            </svg>
-                            <span>{new Date(material.createdAt).toLocaleDateString("ar-SA")}</span>
-                          </span>
-                        </div>
-
-                        {/* Title overlay on image (bottom-right) */}
-                        <div className="absolute right-3 bottom-3">
-                          <h3 className="text-sm font-semibold text-white bg-black/50 px-3 py-1 rounded-full line-clamp-1  text-right">{material.title}</h3>
-                        </div>
-                      </div>
-
-                      <div className="flex-1">
-                        {/* Title moved to image overlay */}
-                        {material.description ? (
-                          <p className="text-xs text-white/60 mt-1 line-clamp-2 md:line-clamp-3">{material.description}</p>
-                        ) : null}
-                      </div>
-                    </div>
-                  </div>
-                </Link>
-              ))}
-
-              {/* Add Material Card - Match material card size and layout */}
-              <div
-                className={`group relative transition-all duration-500 w-full ${showForm ? "scale-[1.02]" : ""}`}
+        {/* عناصر التحكم السفلية */}
+        <div
+          className={`absolute left-0 right-0 bottom-4 px-2 transition-opacity duration-200 z-50 bg-black/20 backdrop-blur-sm rounded-md ${showControls ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"}`}
+        >
+          <div className="flex flex-row items-center justify-between gap-2 sm:gap-3">
+            <div className="flex items-center gap-2 sm:gap-3 flex-wrap w-full sm:w-auto justify-start">
+              <button
+                onClick={togglePlayPause}
+                className="flex items-center justify-center rounded-full bg-gradient-to-br from-gray-900 to-black min-w-[44px] h-9 sm:min-w-[56px] sm:h-12 sm:w-14 text-white shadow-2xl active:scale-95 transition-transform hover:scale-105 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+                aria-label={isPlaying ? "إيقاف" : "تشغيل"}
               >
-                {/* Glow Effect for Add Card (matches material cards) */}
-                <div className="absolute inset-0 bg-gradient-to-r from-emerald-500/10 via-teal-500/10 to-cyan-500/10 rounded-2xl blur-xl opacity-0 group-hover:opacity-100 transition-opacity duration-500" />
+                {isPlaying ? <Icons.Pause /> : <Icons.Play />}
+              </button>
 
-                <div
-                  onClick={() => !showForm && setShowForm(true)}
-                  className={`relative bg-gradient-to-r from-gray-800/40 to-gray-900/40 backdrop-blur-sm border ${
-                    showForm
-                      ? "border-emerald-500/50"
-                      : "border-white/10 md:group-hover:border-emerald-500/30"
-                  } rounded-2xl p-4 md:p-6 cursor-pointer transition-all duration-500 w-full min-h-[220px] ${!showForm ? "md:hover:shadow-2xl md:hover:shadow-emerald-500/10 md:hover:-translate-y-1" : ""}`}
+              <button
+                onClick={() => {
+                  if (volume > 0) {
+                    prevVolumeRef.current = volume;
+                    setVolume(0);
+                  } else {
+                    setVolume(prevVolumeRef.current > 0 ? prevVolumeRef.current : 1);
+                  }
+                }}
+                className="flex items-center justify-center rounded-full bg-gradient-to-br from-gray-900/80 to-black/80 min-w-[36px] h-8 sm:min-w-[44px] sm:h-11 sm:w-10 text-white shadow active:scale-95 transition-transform hover:scale-105 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+                aria-label={volume === 0 ? "تشغيل الصوت" : "كتم الصوت"}
+              >
+                {volume === 0 ? (
+                  <Icons.VolumeOff />
+                ) : volume < 0.5 ? (
+                  <Icons.VolumeLow />
+                ) : (
+                  <Icons.VolumeHigh />
+                )}
+              </button>
+
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.01"
+                value={volume}
+                onChange={(e) => {
+                  const v = parseFloat(e.target.value);
+                  if (v > 0) prevVolumeRef.current = v;
+                  setVolume(v);
+                }}
+                className="hidden sm:block w-16 sm:w-28 ml-2 accent-red-600"
+                aria-label="مستوى الصوت"
+              />
+
+              {/* قائمة الجودة (لشاشات كبيرة) */}
+              <div className="relative hidden sm:block" ref={qualityRef}>
+                <button
+                  onClick={() => {
+                    setQualityMenuOpen(!qualityMenuOpen);
+                    setSpeedMenuOpen(false);
+                    setSettingsMenuOpen(false);
+                  }}
+                  className="flex items-center gap-2 rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-2 py-1 shadow-lg border border-white/10 min-w-[36px] h-8 sm:min-w-[44px] sm:h-10 transition-transform hover:scale-105 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+                  aria-expanded={qualityMenuOpen}
+                  aria-label="اختيار الجودة"
                 >
-                    {!showForm ? (
-                      <div className="flex flex-col gap-6 items-start">
-                      {/* Content Left - badge on left, title on right to match materials */}
-                      <div className="flex items-center justify-between w-full mb-3">
-                        <span className="px-3 py-1 bg-gradient-to-r from-emerald-600 to-teal-600 text-white text-xs font-semibold rounded-full shadow">مادة</span>
-                        <h3 className="text-xl font-bold text-white mb-0 group-hover:text-emerald-300 transition-colors duration-300 text-right">إضافة مادة جديدة</h3>
-                      </div>
+                  <Icons.Quality />
+                  <span className="font-medium">
+                    {currentQuality ? `${currentQuality}p` : "الجودة"}
+                  </span>
+                  <Icons.ChevronDown />
+                </button>
+                {qualityMenuOpen && video && video.qualities && (
+                  <div className="absolute bottom-12 right-0 bg-gradient-to-b from-gray-900 to-black border border-white/10 rounded-xl shadow-2xl py-2 z-50 w-52 backdrop-blur-lg max-h-60 overflow-y-auto">
+                    {[...video.qualities]
+                      .sort((a, b) => parseInt(a.quality) - parseInt(b.quality))
+                      .map((q) => (
+                        <button
+                          key={q.quality}
+                          onClick={() => handleQualityChangePersist(q.quality)}
+                          className={`w-full text-right px-5 py-3 text-sm ${String(q.quality) === String(currentQuality) ? "bg-gradient-to-r from-red-600 to-red-800 text-white font-semibold" : "text-white/80"}`}
+                        >
+                          <span>{q.quality}p</span>
+                        </button>
+                      ))}
+                  </div>
+                )}
+              </div>
 
-                      {/* Top icon area (full-width for vertical card) */}
-                      <div className="w-full h-36 flex-shrink-0 rounded-xl bg-gradient-to-br from-emerald-900/40 to-teal-900/40 border-2 border-emerald-500/20 flex items-center justify-center group-hover:border-emerald-500/40 transition-colors duration-300">
-                        <div className="w-12 h-12 rounded-full bg-gradient-to-r from-emerald-500 to-teal-500 flex items-center justify-center shadow-lg">
-                          <svg
-                            className="w-6 h-6 text-white"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2}
-                              d="M12 4v16m8-8H4"
-                            />
-                          </svg>
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div onClick={(e) => e.stopPropagation()}>
-                      <div className="flex items-start justify-between mb-4">
-                        <div>
-                          <h3 className="text-xl font-bold text-white">
-                            إنشاء مادة جديدة
-                          </h3>
-                          <p className="text-white/60 text-sm mt-1">
-                            املأ التفاصيل أدناه
-                          </p>
+              {/* قائمة السرعة (لشاشات كبيرة) */}
+              <div className="relative hidden sm:block" ref={speedRef}>
+                <button
+                  onClick={() => {
+                    setSpeedMenuOpen(!speedMenuOpen);
+                    setQualityMenuOpen(false);
+                    setSettingsMenuOpen(false);
+                  }}
+                  className="flex items-center gap-2 rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-2 py-1 shadow-lg border border-white/10 min-w-[36px] h-8 sm:min-w-[44px] sm:h-10 transition-transform hover:scale-105 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+                  aria-expanded={speedMenuOpen}
+                  aria-label="اختيار السرعة"
+                >
+                  <Icons.Speed />
+                  <span className="font-medium">{playbackRate.toFixed(2)}x</span>
+                  <Icons.ChevronDown />
+                </button>
+                {speedMenuOpen && (
+                  <div className="absolute bottom-12 right-0 bg-gradient-to-b from-gray-900 to-black border border-white/10 rounded-2xl shadow-2xl w-56 p-3 backdrop-blur-lg z-50">
+                    <div className="flex flex-col items-center w-full gap-3 mb-3">
+                      <div className="flex items-center justify-center gap-3 w-full">
+                        <button
+                          onClick={() => adjustRate(-0.05)}
+                          className="bg-black/60 text-white rounded-full w-8 h-8 flex items-center justify-center text-lg"
+                        >
+                          −
+                        </button>
+                        <div className="text-2xl font-semibold text-white">
+                          {playbackRate.toFixed(2)}x
                         </div>
                         <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setShowForm(false);
-                            setFormData({ title: "", thumbnail: "" });
-                          }}
-                          className="p-1.5 rounded-lg bg-white/10 hover:bg-white/20 transition-colors duration-300"
+                          onClick={() => adjustRate(0.05)}
+                          className="bg-black/60 text-white rounded-full w-8 h-8 flex items-center justify-center text-lg"
                         >
-                          <svg
-                            className="w-4 h-4 text-white/80"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              strokeWidth={2}
-                              d="M6 18L18 6M6 6l12 12"
-                            />
-                          </svg>
+                          +
                         </button>
                       </div>
-
-                      <form
-                        onSubmit={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          handleSubmit(e);
+                      <input
+                        type="range"
+                        min="0.25"
+                        max="3"
+                        step="0.05"
+                        value={playbackRate}
+                        onChange={(e) => {
+                          const v = Math.round(parseFloat(e.target.value) * 100) / 100;
+                          setPlaybackRate(v);
+                          showRateFeedback(v);
                         }}
-                        className="flex flex-col gap-4"
-                      >
-                        {/* Image Upload Section - First */}
-                        <div className="w-full h-36 flex-shrink-0 mx-auto">
-                          <div className="w-full h-full rounded-xl overflow-hidden border border-white/10 relative flex flex-col">
-                            {formData.thumbnail ? (
-                              // حالة وجود صورة - عرض المعاينة مع زر الحذف
-                              <>
-                                <img
-                                  src={
-                                    typeof formData.thumbnail === "string"
-                                      ? formData.thumbnail
-                                      : URL.createObjectURL(formData.thumbnail)
-                                  }
-                                  alt="معاينة الصورة"
-                                  className="w-full h-full object-cover"
-                                />
-                                {/* زر الحذف - أعلى يمين الصورة */}
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setFormData({ ...formData, thumbnail: "" });
-                                  }}
-                                  className="absolute top-2 right-2 p-1.5 bg-red-500/80 hover:bg-red-600 text-white rounded-full transition-colors duration-200 backdrop-blur-sm border border-white/20"
-                                  title="حذف الصورة"
-                                >
-                                  <svg
-                                    className="w-3.5 h-3.5"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    viewBox="0 0 24 24"
-                                  >
-                                    <path
-                                      strokeLinecap="round"
-                                      strokeLinejoin="round"
-                                      strokeWidth={2}
-                                      d="M6 18L18 6M6 6l12 12"
-                                    />
-                                  </svg>
-                                </button>
-
-                                {/* زر تغيير الصورة - أسفل الصورة */}
-                                <div className="absolute bottom-2 left-2 right-2">
-                                  <label className="block cursor-pointer">
-                                    <div className="px-2 py-1.5 text-xs bg-white/10 hover:bg-white/20 text-white/80 rounded-lg transition-colors duration-200 text-center backdrop-blur-sm border border-white/20">
-                                      <CloudinaryImageInput
-                                        value={formData.thumbnail}
-                                        onChange={(url) =>
-                                          setFormData({
-                                            ...formData,
-                                            thumbnail: url,
-                                          })
-                                        }
-                                        compact={true}
-                                        showLabel={false}
-                                        buttonText="تغيير الصورة"
-                                      />
-                                    </div>
-                                  </label>
-                                </div>
-                              </>
-                            ) : (
-                              // حالة عدم وجود صورة - عرض مربع الرفع
-                              <div className="w-full h-full bg-gradient-to-br from-gray-700 to-gray-900 flex flex-col items-center justify-center p-3">
-                                <div className="relative w-full h-full border-2 border-dashed border-white/30 rounded-lg hover:border-emerald-400/50 transition-colors duration-300 group">
-                                  <label className="absolute inset-0 flex flex-col items-center justify-center cursor-pointer">
-                                    {/* مكون CloudinaryImageInput ظاهر */}
-                                    <div className="absolute inset-0 flex items-center justify-center">
-                                      <CloudinaryImageInput
-                                        value={formData.thumbnail}
-                                        onChange={(url) =>
-                                          setFormData({
-                                            ...formData,
-                                            thumbnail: url,
-                                          })
-                                        }
-                                        compact={true}
-                                        showLabel={false}
-                                        buttonText="اختر صورة"
-                                      />
-                                    </div>
-                                  </label>
-                                </div>
-
-                                {/* نص إضافي */}
-                                <span className="text-[10px] text-white/40 mt-2 text-center">
-                                  PNG, JPG, GIF
-                                </span>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Form Content - Material Name and Button */}
-                        <div className="space-y-3">
-                          <div>
-                            <label className="block text-sm font-medium text-white/80 mb-1">
-                              <span className="flex items-center gap-1.5">
-                                <svg
-                                  className="w-4 h-4"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  viewBox="0 0 24 24"
-                                >
-                                  <path
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    strokeWidth={2}
-                                    d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                                  />
-                                </svg>
-                                اسم المادة
-                              </span>
-                            </label>
-                            <input
-                              type="text"
-                              required
-                              value={formData.title}
-                              onChange={(e) =>
-                                setFormData({
-                                  ...formData,
-                                  title: e.target.value,
-                                })
-                              }
-                              className="w-full px-3 py-2 text-sm bg-white/5 backdrop-blur-sm border border-white/10 text-white rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all duration-300 placeholder-white/40"
-                              placeholder="أدخل اسم المادة..."
-                              autoFocus
-                            />
-                          </div>
-
-                          <button
-                            type="submit"
-                            disabled={uploading || !formData.title.trim()}
-                            className="px-4 py-2 text-sm bg-gradient-to-r from-emerald-600 to-teal-600 text-white rounded-lg hover:from-emerald-500 hover:to-teal-500 disabled:opacity-50 disabled:cursor-not-allowed transform hover:-translate-y-0.5 transition-all duration-200 font-medium w-full flex items-center justify-center gap-2"
-                          >
-                            {uploading ? (
-                              <>
-                                <svg
-                                  className="animate-spin h-4 w-4 text-white"
-                                  xmlns="http://www.w3.org/2000/svg"
-                                  fill="none"
-                                  viewBox="0 0 24 24"
-                                >
-                                  <circle
-                                    className="opacity-25"
-                                    cx="12"
-                                    cy="12"
-                                    r="10"
-                                    stroke="currentColor"
-                                    strokeWidth="4"
-                                  />
-                                  <path
-                                    className="opacity-75"
-                                    fill="currentColor"
-                                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                                  />
-                                </svg>
-                                جاري الإضافة...
-                              </>
-                            ) : (
-                              <>
-                                <svg
-                                  className="w-4 h-4"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  viewBox="0 0 24 24"
-                                >
-                                  <path
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    strokeWidth={2}
-                                    d="M12 6v6m0 0v6m0-6h6m-6 0H6"
-                                  />
-                                </svg>
-                                إضافة المادة
-                              </>
-                            )}
-                          </button>
-                        </div>
-                      </form>
+                        className="w-full accent-red-600"
+                        aria-label="شريط سرعة التشغيل"
+                      />
                     </div>
+                  </div>
+                )}
+              </div>
+
+              {/* قائمة الإعدادات (لشاشات صغيرة) */}
+              <div className="relative sm:hidden" ref={settingsRef}>
+                <button
+                  onClick={() => {
+                    setSettingsMenuOpen(!settingsMenuOpen);
+                    setQualityMenuOpen(false);
+                    setSpeedMenuOpen(false);
+                  }}
+                  className="flex items-center justify-center rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-2 py-1 shadow-lg border border-white/10 min-w-[36px] h-8 transition-transform hover:scale-105 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+                  aria-label="الإعدادات"
+                >
+                  <Icons.Settings />
+                </button>
+                {settingsMenuOpen && (
+                  <div className="absolute bottom-12 right-0 bg-gradient-to-b from-gray-900 to-black border border-white/10 rounded-xl shadow-2xl py-2 z-50 w-56 backdrop-blur-lg">
+                    <div className="px-3 py-2 text-sm text-white/80">الجودة</div>
+                    {video &&
+                      video.qualities &&
+                      [...video.qualities]
+                        .sort((a, b) => parseInt(a.quality) - parseInt(b.quality))
+                        .map((q) => (
+                          <button
+                            key={q.quality}
+                            onClick={() => handleQualityChangePersist(q.quality)}
+                            className={`w-full text-right px-5 py-2 text-sm ${String(q.quality) === String(currentQuality) ? "bg-gradient-to-r from-red-600 to-red-800 text-white font-semibold" : "text-white/80"}`}
+                          >
+                            {q.quality}p
+                          </button>
+                        ))}
+                    <div className="px-3 py-2 text-sm text-white/80">السرعة</div>
+                    <div className="px-3 py-2">
+                      <input
+                        type="range"
+                        min="0.25"
+                        max="3"
+                        step="0.05"
+                        value={playbackRate}
+                        onChange={(e) => {
+                          const v = Math.round(parseFloat(e.target.value) * 100) / 100;
+                          setPlaybackRate(v);
+                          showRateFeedback(v);
+                        }}
+                        className="w-full accent-red-600"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* زر التحميل */}
+              <div className="relative hidden sm:block">
+                <button
+                  onClick={handleDownload}
+                  disabled={isDownloading}
+                  className={`flex items-center gap-2 rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-2 py-1 shadow-lg border border-white/10 min-w-[36px] h-8 sm:min-w-[44px] sm:h-10 transition-transform hover:scale-105 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 ${!isLoggedIn && !user?.isAdmin ? "opacity-50 cursor-not-allowed" : ""}`}
+                  aria-label="تحميل الفيديو"
+                >
+                  {isDownloading ? (
+                    <>
+                      <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                      </svg>
+                      <span className="font-medium">
+                        {downloadProgress != null ? `تحميل ${downloadProgress}%` : "جاري التحميل..."}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
+                        <path d="M12 3V15" strokeLinecap="round" strokeLinejoin="round" />
+                        <path d="M8 11L12 15L16 11" strokeLinecap="round" strokeLinejoin="round" />
+                        <path d="M21 21H3" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                      <span className="font-medium">تحميل</span>
+                    </>
                   )}
-                </div>
+                </button>
               </div>
             </div>
-          )}
+          </div>
         </div>
       </div>
     </div>
   );
-};
+}
 
-export default MaterialsList;
+export default React.memo(VideoPlayer);

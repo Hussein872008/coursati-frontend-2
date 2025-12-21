@@ -235,19 +235,19 @@ const InstructorDetail = () => {
 
         {/* Instructor Info Header */}
         <div className="admin-card p-8 mb-8 bg-gradient-to-r from-gray-800/60 via-gray-900/60 to-gray-800/60 backdrop-blur-xl border border-white/10 rounded-3xl shadow-2xl">
-          <div className="flex flex-col md:flex-row items-center justify-between">
-            <div className="flex items-center gap-6 mb-4 md:mb-0">
+          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+            <div className="flex items-center gap-4 mb-3 md:mb-0">
               {(instructor.thumbnailUrl || instructor.thumbnail) && (
-                <div className="w-20 h-20 rounded-2xl overflow-hidden border-2 border-white/10">
+                <div className="w-24 h-24 md:w-20 md:h-20 rounded-2xl overflow-hidden border-2 border-white/10 bg-white/3 flex items-center justify-center">
                   <img
                     src={instructor.thumbnailUrl || instructor.thumbnail}
                     alt={instructor.title}
-                    className="w-full h-full object-cover"
+                    className="w-full h-full object-contain"
                   />
                 </div>
               )}
               <div>
-                <h1 className="text-3xl font-bold bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-500 bg-clip-text text-transparent">
+                <h1 className="text-2xl md:text-3xl font-bold bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-500 bg-clip-text text-transparent">
                   {instructor.title}
                 </h1>
                 <p className="text-white/60 text-sm mt-1">
@@ -256,16 +256,16 @@ const InstructorDetail = () => {
               </div>
             </div>
 
-            <div className="flex items-center gap-4 bg-gray-900/40 backdrop-blur-sm rounded-2xl p-4 border border-white/10">
-              <div className="text-center px-4">
-                <div className="text-3xl font-bold bg-gradient-to-r from-cyan-400 to-blue-400 bg-clip-text text-transparent">
+            <div className="flex items-center gap-4 bg-gray-900/40 backdrop-blur-sm rounded-2xl p-3 border border-white/10 mt-1 md:mt-0">
+              <div className="text-center px-3">
+                <div className="text-2xl md:text-3xl font-bold bg-gradient-to-r from-cyan-400 to-blue-400 bg-clip-text text-transparent">
                   {chapters.length}
                 </div>
                 <div className="text-sm text-white/70">الفصول</div>
               </div>
-              <div className="h-10 w-px bg-white/10"></div>
-              <div className="text-center px-4">
-                <div className="text-3xl font-bold bg-gradient-to-r from-emerald-400 to-teal-400 bg-clip-text text-transparent">
+              <div className="h-8 w-px bg-white/10 hidden md:block" />
+              <div className="text-center px-3">
+                <div className="text-2xl md:text-3xl font-bold bg-gradient-to-r from-emerald-400 to-teal-400 bg-clip-text text-transparent">
                   {lecturesCount}
                 </div>
                 <div className="text-sm text-white/70">المحاضرات</div>
@@ -278,10 +278,10 @@ const InstructorDetail = () => {
         <div className="space-y-8">
           {/* Tabs Navigation */}
           <div className="admin-card p-2 bg-gradient-to-r from-gray-800/40 to-gray-900/40 backdrop-blur-sm border border-white/10 rounded-2xl">
-            <div className="flex space-x-2 rtl:space-x-reverse">
+            <div className="flex space-x-2 rtl:space-x-reverse overflow-x-auto no-scrollbar py-2">
               <button
                 onClick={() => setActiveTab("chapters")}
-                className={`flex-1 px-6 py-3 rounded-xl font-semibold transition-all duration-200 flex items-center justify-center gap-2 ${
+                className={`min-w-[140px] whitespace-nowrap px-6 py-3 rounded-xl font-semibold transition-all duration-200 flex items-center justify-center gap-2 ${
                   activeTab === "chapters"
                     ? "bg-gradient-to-r from-cyan-500 to-blue-500 text-white shadow-md"
                     : "text-white/60 hover:bg-white/5 hover:text-white/80"
@@ -304,7 +304,7 @@ const InstructorDetail = () => {
               </button>
               <button
                 onClick={() => setActiveTab("details")}
-                className={`flex-1 px-6 py-3 rounded-xl font-semibold transition-all duration-200 flex items-center justify-center gap-2 ${
+                className={`min-w-[140px] whitespace-nowrap px-6 py-3 rounded-xl font-semibold transition-all duration-200 flex items-center justify-center gap-2 ${
                   activeTab === "details"
                     ? "bg-gradient-to-r from-cyan-500 to-blue-500 text-white shadow-md"
                     : "text-white/60 hover:bg-white/5 hover:text-white/80"
@@ -327,7 +327,7 @@ const InstructorDetail = () => {
               </button>
               <button
                 onClick={() => setActiveTab("settings")}
-                className={`flex-1 px-6 py-3 rounded-xl font-semibold transition-all duration-200 flex items-center justify-center gap-2 ${
+                className={`min-w-[140px] whitespace-nowrap px-6 py-3 rounded-xl font-semibold transition-all duration-200 flex items-center justify-center gap-2 ${
                   activeTab === "settings"
                     ? "bg-gradient-to-r from-cyan-500 to-blue-500 text-white shadow-md"
                     : "text-white/60 hover:bg-white/5 hover:text-white/80"
@@ -360,7 +360,7 @@ const InstructorDetail = () => {
           {/* Chapters Tab */}
           {activeTab === "chapters" && (
             <div className="space-y-8">
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                 {/* Chapters Cards - New Design (Right Image, Left Content) */}
                 {chapters.map((chapter) => (
                   <Link
@@ -380,7 +380,7 @@ const InstructorDetail = () => {
                     />
 
                     <div className="relative bg-gradient-to-r from-gray-800/40 to-gray-900/40 backdrop-blur-sm border border-white/10 rounded-2xl p-6 hover:border-cyan-500/30 hover:shadow-2xl hover:shadow-cyan-500/10 transition-all duration-500">
-                      <div className="flex gap-6 items-start">
+                      <div className="flex flex-col sm:flex-row gap-4 sm:gap-6 items-start">
                         {/* Content Left */}
                         <div className="flex-1">
                           <div className="flex items-center gap-3 mb-4">
@@ -435,13 +435,14 @@ const InstructorDetail = () => {
                           </div>
                         </div>
 
-                        {/* Image Right */}
-                        <div className="w-32 h-32 flex-shrink-0 rounded-xl overflow-hidden border-2 border-white/10 group-hover:border-cyan-500/30 transition-colors duration-300">
+                        {/* Image Right (stack on mobile) */}
+                        <div className="w-full sm:w-32 h-40 sm:h-32 flex-shrink-0 rounded-xl overflow-hidden border-2 border-white/10 group-hover:border-cyan-500/30 transition-colors duration-300 bg-white/3 flex items-center justify-center">
                           {chapter.thumbnail ? (
                             <img
                               src={chapter.thumbnail}
                               alt={chapter.title}
-                              className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
+                              className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-500"
+                              style={{ objectPosition: 'center' }}
                             />
                           ) : (
                             <div className="w-full h-full bg-gradient-to-br from-blue-900/40 to-cyan-900/40 flex flex-col items-center justify-center">
@@ -490,7 +491,7 @@ const InstructorDetail = () => {
                     }`}
                   >
                     {!showForm ? (
-                      <div className="flex gap-6 items-center">
+                      <div className="flex flex-col sm:flex-row gap-4 sm:gap-6 items-start">
                         {/* Content Left */}
                         <div className="flex-1">
                           <div className="mb-4">
@@ -530,7 +531,7 @@ const InstructorDetail = () => {
                         </div>
 
                         {/* Icon Right */}
-                        <div className="w-32 h-32 flex-shrink-0 rounded-xl bg-gradient-to-br from-emerald-900/40 to-teal-900/40 border-2 border-emerald-500/20 flex items-center justify-center group-hover:border-emerald-500/40 transition-colors duration-300">
+                        <div className="w-full sm:w-32 h-40 sm:h-32 flex-shrink-0 rounded-xl bg-gradient-to-br from-emerald-900/40 to-teal-900/40 border-2 border-emerald-500/20 flex items-center justify-center group-hover:border-emerald-500/40 transition-colors duration-300">
                           <div className="w-16 h-16 rounded-full bg-gradient-to-r from-emerald-500 to-teal-500 flex items-center justify-center shadow-lg">
                             <svg
                               className="w-10 h-10 text-white"
@@ -589,7 +590,7 @@ const InstructorDetail = () => {
                             e.stopPropagation();
                             handleSubmit(e);
                           }}
-                          className="flex gap-6 items-center"
+                          className="flex flex-col sm:flex-row gap-4 items-start"
                         >
                           {/* Form Content Left */}
                           <div className="flex-1 space-y-3">
@@ -679,8 +680,8 @@ const InstructorDetail = () => {
                           </div>
 
                           {/* Image Preview Right */}
-                          <div className="w-32 h-32 flex-shrink-0">
-                            <div className="w-full h-full rounded-xl overflow-hidden border border-white/10 relative flex flex-col">
+                          <div className="w-full sm:w-32 h-40 sm:h-32 flex-shrink-0">
+                            <div className="w-full h-full rounded-xl overflow-hidden border border-white/10 relative flex flex-col bg-white/3">
                               {formData.thumbnail ? (
                                 <>
                                   <img
@@ -692,7 +693,7 @@ const InstructorDetail = () => {
                                           )
                                     }
                                     alt="معاينة الصورة"
-                                    className="w-full h-full object-cover"
+                                    className="w-full h-full object-contain"
                                   />
                                   <button
                                     type="button"
@@ -905,7 +906,7 @@ const InstructorDetail = () => {
                 {/* Edit Card */}
                 <div className="bg-gradient-to-r from-amber-500/10 to-yellow-500/10 border border-amber-400/20 rounded-2xl p-6 backdrop-blur-sm">
                   <div className="flex items-start gap-6">
-                    <div className="w-28 h-28 rounded-xl overflow-hidden bg-white/5 border-2 border-white/10 flex items-center justify-center">
+                    <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-xl overflow-hidden bg-white/5 border-2 border-white/10 flex items-center justify-center">
                       {editData.thumbnail ? (
                         <img
                           src={
@@ -914,7 +915,7 @@ const InstructorDetail = () => {
                               : ""
                           }
                           alt="thumbnail"
-                          className="w-full h-full object-cover"
+                          className="w-full h-full object-contain"
                         />
                       ) : (
                         <div className="w-full h-full flex flex-col items-center justify-center text-white/40">

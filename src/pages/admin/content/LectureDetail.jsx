@@ -78,9 +78,9 @@ const LectureDetailWithMedia = () => {
   const [videoFormData, setVideoFormData] = useState({
     title: "",
     duration: 0,
-    hours: 0,
-    minutes: 0,
-    seconds: 0,
+    hours: "",
+    minutes: "",
+    seconds: "",
     qualities: [{ quality: "360", lastSegmentUrl: "" }],
   });
   const [isUploadingVideo, setIsUploadingVideo] = useState(false);
@@ -112,6 +112,38 @@ const LectureDetailWithMedia = () => {
     loadPdfs();
     loadVideos();
   }, [materialId, instructorId, chapterId, lectureId]);
+
+  // Helper: responsive popover style (full-width on small screens)
+  const getPopoverStyle = (p) => {
+    if (!p) return { display: "none" };
+    if (typeof window === "undefined") {
+      return { position: "fixed", left: p.left, top: p.top, zIndex: 9999 };
+    }
+    const isSmall = window.innerWidth < 640; // tailwind 'sm' breakpoint
+    if (isSmall) {
+      return { position: "fixed", left: 16, right: 16, top: p.top + 8, zIndex: 9999 };
+    }
+    return { position: "fixed", left: p.left, top: p.top, zIndex: 9999, transform: "translateX(-80px)" };
+  };
+
+  // Suggest next quality when adding new quality rows
+  const getNextQuality = (qualities = []) => {
+    const common = [360, 480, 720, 1080, 1440];
+    if (!qualities || qualities.length === 0) return String(common[0]);
+    // try parse last numeric quality
+    const last = qualities[qualities.length - 1];
+    const lastNum = parseInt(last?.quality, 10) || NaN;
+    if (!isNaN(lastNum)) {
+      const idx = common.indexOf(lastNum);
+      if (idx >= 0 && idx < common.length - 1) return String(common[idx + 1]);
+      // if last is larger or unknown, return largest known next (e.g., 1080 -> 1440)
+      for (const q of common) if (q > lastNum) return String(q);
+      return String(common[common.length - 1]);
+    }
+    // fallback: suggest 480 if first was 360, else 720
+    if (qualities.length === 1) return "480";
+    return "720";
+  };
 
   const loadVideos = async () => {
     setVideosLoading(true);
@@ -246,6 +278,65 @@ const LectureDetailWithMedia = () => {
   // Video submit (admin)
   const handleVideoSubmit = async (e) => {
     e.preventDefault();
+    // Validate qualities before submitting
+    const validateQualities = (qualities) => {
+      if (!qualities || qualities.length === 0) return { ok: true };
+      // ensure quality keys are unique
+      const quals = qualities.map((q) => String(q.quality || '').trim());
+      const dup = quals.find((v, i) => v && quals.indexOf(v) !== i);
+      if (dup) return { ok: false, message: `الجودة "${dup}" مكرّرة. الرجاء حذف التكرارات.` };
+
+      // ensure URLs are present and not identical
+      const urls = qualities.map((q) => String(q.lastSegmentUrl || q.url || '').trim());
+      for (let i = 0; i < urls.length; i++) {
+        if (!urls[i]) return { ok: false, message: 'كل جودة يجب أن تحتوي رابطاً لآخر شريحة (last segment URL).' };
+      }
+      for (let i = 0; i < urls.length; i++) {
+        for (let j = i + 1; j < urls.length; j++) {
+          if (urls[i] === urls[j]) return { ok: false, message: 'روابط الجودات لا يجب أن تكون متطابقة.' };
+        }
+      }
+
+      // derive filename pattern and segment count by picking the numeric group with the largest numeric value
+      const extracted = qualities.map((q, idx) => {
+        const raw = String(q.lastSegmentUrl || q.url || '').trim();
+        try {
+          // use pathname last segment
+          const parts = raw.split('/');
+          const last = parts.pop() || '';
+          const matches = [...last.matchAll(/\d+/g)];
+          if (!matches.length) return { ok: false, index: idx, message: 'اسم الملف الأخير يجب أن يحتوي على رقم يمثل جزء الفيديو.' };
+          // pick the numeric group with largest numeric value
+          let best = matches[0];
+          for (const m of matches) if (parseInt(m[0], 10) > parseInt(best[0], 10)) best = m;
+          const digits = best[0];
+          const pos = best.index;
+          const pattern = last.slice(0, pos) + '{#}' + last.slice(pos + digits.length);
+          const segmentCount = parseInt(digits, 10) || 1;
+          return { ok: true, pattern, segmentCount };
+        } catch (err) {
+          return { ok: false, index: idx, message: 'تعذر تحليل رابط الجودة.' };
+        }
+      });
+
+      for (const ex of extracted) if (!ex.ok) return { ok: false, message: ex.message || 'خطأ في تحليل الجودات.' };
+
+      // ensure all patterns equal and segment counts equal
+      const patterns = extracted.map((x) => x.pattern);
+      const segs = extracted.map((x) => x.segmentCount);
+      const pat0 = patterns[0];
+      for (const p of patterns) if (p !== pat0) return { ok: false, message: 'نمط أسماء الأجزاء غير متطابق بين الجودات. تأكد أن اسم الجزء مثل segment-428-v1-a1.ts يظهر بنفس الموضع لكل جودة.' };
+      const seg0 = segs[0];
+      for (const s of segs) if (s !== seg0) return { ok: false, message: 'عدد الأجزاء الظاهر في رابط الجودات غير متساوٍ — يجب أن تكون الأجزاء متساوية بين الجودات.' };
+
+      return { ok: true };
+    };
+
+    const vres = validateQualities(videoFormData.qualities);
+    if (!vres.ok) {
+      toast.error(vres.message || 'خطأ في بيانات الجودات');
+      return;
+    }
     try {
       setIsUploadingVideo(true);
       const h = Number(videoFormData.hours) || 0;
@@ -280,9 +371,9 @@ const LectureDetailWithMedia = () => {
       setVideoFormData({
         title: "",
         duration: 0,
-        hours: 0,
-        minutes: 0,
-        seconds: 0,
+        hours: "",
+        minutes: "",
+        seconds: "",
         qualities: [{ quality: "360", lastSegmentUrl: "" }],
       });
       await loadVideos();
@@ -565,7 +656,7 @@ const LectureDetailWithMedia = () => {
               <div className="flex flex-col md:flex-row items-center justify-between">
                 <div className="flex items-center gap-6 mb-4 md:mb-0">
                   {(lecture?.thumbnailUrl || lecture?.thumbnail) && (
-                    <div className="w-20 h-20 rounded-2xl overflow-hidden border-2 border-white/10">
+                    <div className="w-20 sm:w-24 md:w-28 h-20 sm:h-24 md:h-28 rounded-2xl overflow-hidden border-2 border-white/10">
                       <img
                         src={lecture.thumbnailUrl || lecture.thumbnail}
                         alt={lecture.title}
@@ -583,15 +674,15 @@ const LectureDetailWithMedia = () => {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-4 bg-gray-900/40 backdrop-blur-sm rounded-2xl p-4 border border-white/10">
-                  <div className="text-center px-4">
-                    <div className="text-3xl font-bold bg-gradient-to-r from-emerald-400 to-teal-400 bg-clip-text text-transparent">
+                <div className="flex flex-col sm:flex-row items-center gap-3 bg-gray-900/40 backdrop-blur-sm rounded-2xl p-3 sm:p-4 border border-white/10">
+                  <div className="text-center px-3 py-1 w-full sm:w-auto">
+                    <div className="text-2xl sm:text-3xl font-bold bg-gradient-to-r from-emerald-400 to-teal-400 bg-clip-text text-transparent">
                       {pdfs.length}
                     </div>
                     <div className="text-sm text-white/70">الملفات</div>
                   </div>
-                  <div className="text-center px-4">
-                    <div className="text-2xl font-bold bg-gradient-to-r from-cyan-400 to-blue-400 bg-clip-text text-transparent">
+                  <div className="text-center px-3 py-1 w-full sm:w-auto">
+                    <div className="text-xl sm:text-2xl font-bold bg-gradient-to-r from-cyan-400 to-blue-400 bg-clip-text text-transparent">
                       {videos.length}
                     </div>
                     <div className="text-sm text-white/70">عدد الفيديوهات</div>
@@ -604,10 +695,10 @@ const LectureDetailWithMedia = () => {
           {/* Tabs Navigation */}
           <motion.div variants={itemVariants}>
             <div className="admin-card p-2 bg-gradient-to-r from-gray-800/40 to-gray-900/40 backdrop-blur-sm border border-white/10 rounded-2xl">
-              <div className="flex space-x-2 rtl:space-x-reverse">
+              <div className="flex space-x-2 rtl:space-x-reverse overflow-x-auto no-scrollbar py-2">
                 <button
                   onClick={() => setActiveTab("videos")}
-                  className={`flex-1 px-6 py-3 rounded-xl font-semibold transition-all duration-200 flex items-center justify-center gap-2 ${
+                  className={`min-w-[140px] flex-shrink-0 sm:flex-1 px-6 py-3 rounded-xl font-semibold transition-all duration-200 flex items-center justify-center gap-2 ${
                     activeTab === "videos"
                       ? "bg-gradient-to-r from-cyan-500 to-blue-500 text-white shadow-md"
                       : "text-white/60 hover:bg-white/5 hover:text-white/80"
@@ -618,7 +709,7 @@ const LectureDetailWithMedia = () => {
                 </button>
                 <button
                   onClick={() => setActiveTab("pdfs")}
-                  className={`flex-1 px-6 py-3 rounded-xl font-semibold transition-all duration-200 flex items-center justify-center gap-2 ${
+                  className={`min-w-[140px] flex-shrink-0 sm:flex-1 px-6 py-3 rounded-xl font-semibold transition-all duration-200 flex items-center justify-center gap-2 ${
                     activeTab === "pdfs"
                       ? "bg-gradient-to-r from-cyan-500 to-blue-500 text-white shadow-md"
                       : "text-white/60 hover:bg-white/5 hover:text-white/80"
@@ -629,7 +720,7 @@ const LectureDetailWithMedia = () => {
                 </button>
                 <button
                   onClick={() => setActiveTab("info")}
-                  className={`flex-1 px-6 py-3 rounded-xl font-semibold transition-all duration-200 flex items-center justify-center gap-2 ${
+                  className={`min-w-[140px] flex-shrink-0 sm:flex-1 px-6 py-3 rounded-xl font-semibold transition-all duration-200 flex items-center justify-center gap-2 ${
                     activeTab === "info"
                       ? "bg-gradient-to-r from-cyan-500 to-blue-500 text-white shadow-md"
                       : "text-white/60 hover:bg-white/5 hover:text-white/80"
@@ -935,7 +1026,7 @@ const LectureDetailWithMedia = () => {
                                       {videoFormData.qualities.map((q, idx) => (
                                         <div
                                           key={idx}
-                                          className="grid grid-cols-3 gap-2 mb-2"
+                                          className="grid grid-cols-12 gap-2 mb-2 items-center"
                                         >
                                           <input
                                             value={q.quality}
@@ -949,7 +1040,7 @@ const LectureDetailWithMedia = () => {
                                                 qualities: arr,
                                               });
                                             }}
-                                            className="px-2 py-1 bg-white/5 border border-white/10 rounded text-white"
+                                            className="col-span-3 px-2 py-1 bg-white/5 border border-white/10 rounded text-white"
                                             placeholder="الجودة"
                                           />
                                           <input
@@ -965,26 +1056,45 @@ const LectureDetailWithMedia = () => {
                                                 qualities: arr,
                                               });
                                             }}
-                                            className="col-span-2 px-2 py-1 bg-white/5 border border-white/10 rounded text-white"
+                                            className="col-span-8 px-2 py-1 bg-white/5 border border-white/10 rounded text-white"
                                             placeholder="آخر شريحة (.ts) URL"
                                           />
+                                          <div className="col-span-1 flex items-center">
+                                            <button
+                                              type="button"
+                                              onClick={() => {
+                                                const arr = [
+                                                  ...videoFormData.qualities,
+                                                ];
+                                                arr.splice(idx, 1);
+                                                setVideoFormData({
+                                                  ...videoFormData,
+                                                  qualities: arr,
+                                                });
+                                              }}
+                                              className="w-full p-1 bg-red-500/80 hover:bg-red-500 text-white rounded"
+                                              title="حذف الجودة"
+                                            >
+                                              ×
+                                            </button>
+                                          </div>
                                         </div>
                                       ))}
                                       <div>
                                         <button
                                           type="button"
-                                          onClick={() =>
+                                          onClick={() => {
+                                            const next = getNextQuality(
+                                              videoFormData.qualities,
+                                            );
                                             setVideoFormData({
                                               ...videoFormData,
                                               qualities: [
                                                 ...videoFormData.qualities,
-                                                {
-                                                  quality: "720",
-                                                  lastSegmentUrl: "",
-                                                },
+                                                { quality: next, lastSegmentUrl: "" },
                                               ],
-                                            })
-                                          }
+                                            });
+                                          }}
                                           className="px-3 py-1 bg-white/10 text-white rounded hover:bg-white/20 transition-colors text-sm"
                                         >
                                           + إضافة جودة
@@ -1059,13 +1169,13 @@ const LectureDetailWithMedia = () => {
                                         </div>
                                       </div>
 
-                                      <div className="mt-6 flex items-center gap-4">
+                                      <div className="mt-4 sm:mt-6 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
                                         <button
                                           onClick={() => {
                                             setSelectedVideo(video);
                                             setShowVideoModal(true);
                                           }}
-                                          className="text-sm px-3 py-1.5 bg-gradient-to-r from-cyan-500 to-blue-500 hover:from-cyan-600 hover:to-blue-600 text-white rounded-lg transition-all duration-200 flex items-center gap-2 group/play"
+                                          className="w-full sm:w-auto text-sm px-3 py-2 bg-gradient-to-r from-cyan-500 to-blue-500 hover:from-cyan-600 hover:to-blue-600 text-white rounded-lg transition-all duration-200 flex items-center justify-center gap-2 group/play"
                                         >
                                           <ExternalLink className="w-4 h-4" />
                                           <span>تشغيل الفيديو</span>
@@ -1095,7 +1205,7 @@ const LectureDetailWithMedia = () => {
                                                 fetchVideoViewers(video._id);
                                               }
                                             }}
-                                            className="flex items-center gap-2 text-sm text-white/70 px-2 py-1 bg-white/5 rounded-lg"
+                                            className="w-full sm:w-auto flex items-center gap-2 text-sm text-white/70 px-2 py-1 bg-white/5 rounded-lg justify-center"
                                             title="مشاهدو الفيديو"
                                           >
                                             <Eye className="w-4 h-4 text-emerald-300" />
@@ -1132,7 +1242,7 @@ const LectureDetailWithMedia = () => {
                                                 fetchVideoDownloads(video._id);
                                               }
                                             }}
-                                            className="flex items-center gap-2 text-sm text-white/70 px-2 py-1 bg-white/5 rounded-lg"
+                                            className="w-full sm:w-auto flex items-center gap-2 text-sm text-white/70 px-2 py-1 bg-white/5 rounded-lg justify-center"
                                             title="من حمل الفيديو"
                                           >
                                             <FileDown className="w-4 h-4 text-sky-300" />
@@ -1192,7 +1302,7 @@ const LectureDetailWithMedia = () => {
                                     </div>
 
                                     {/* Icon Right */}
-                                    <div className="w-20 h-20 flex-shrink-0 rounded-xl bg-gradient-to-br from-cyan-900/40 to-blue-900/40 border-2 border-white/10 group-hover:border-cyan-500/30 transition-colors duration-300 flex items-center justify-center">
+                                    <div className="w-full sm:w-20 h-20 flex-shrink-0 mt-4 sm:mt-0 rounded-xl bg-gradient-to-br from-cyan-900/40 to-blue-900/40 border-2 border-white/10 group-hover:border-cyan-500/30 transition-colors duration-300 flex items-center justify-center">
                                       <div className="w-14 h-14 rounded-full bg-gradient-to-r from-cyan-500 to-blue-500 flex items-center justify-center shadow-lg">
                                         <FileDown className="w-8 h-8 text-white" />
                                       </div>
@@ -1308,7 +1418,7 @@ const LectureDetailWithMedia = () => {
                                   {videoFormData.qualities.map((q, idx) => (
                                     <div
                                       key={idx}
-                                      className="grid grid-cols-3 gap-2 mb-2"
+                                      className="grid grid-cols-12 gap-2 mb-2 items-center"
                                     >
                                       <input
                                         value={q.quality}
@@ -1322,7 +1432,7 @@ const LectureDetailWithMedia = () => {
                                             qualities: arr,
                                           });
                                         }}
-                                        className="px-2 py-1 bg-white/5 border border-white/10 rounded text-white"
+                                        className="col-span-3 px-2 py-1 bg-white/5 border border-white/10 rounded text-white"
                                         placeholder="الجودة"
                                       />
                                       <input
@@ -1338,26 +1448,43 @@ const LectureDetailWithMedia = () => {
                                             qualities: arr,
                                           });
                                         }}
-                                        className="col-span-2 px-2 py-1 bg-white/5 border border-white/10 rounded text-white"
+                                        className="col-span-8 px-2 py-1 bg-white/5 border border-white/10 rounded text-white"
                                         placeholder="آخر شريحة (.ts) URL"
                                       />
+                                      <div className="col-span-1 flex items-center">
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            const arr = [
+                                              ...videoFormData.qualities,
+                                            ];
+                                            arr.splice(idx, 1);
+                                            setVideoFormData({
+                                              ...videoFormData,
+                                              qualities: arr,
+                                            });
+                                          }}
+                                          className="w-full p-1 bg-red-500/80 hover:bg-red-500 text-white rounded"
+                                          title="حذف الجودة"
+                                        >
+                                          ×
+                                        </button>
+                                      </div>
                                     </div>
                                   ))}
                                   <div>
                                     <button
                                       type="button"
-                                      onClick={() =>
+                                      onClick={() => {
+                                        const next = getNextQuality(videoFormData.qualities);
                                         setVideoFormData({
                                           ...videoFormData,
                                           qualities: [
                                             ...videoFormData.qualities,
-                                            {
-                                              quality: "720",
-                                              lastSegmentUrl: "",
-                                            },
+                                            { quality: next, lastSegmentUrl: "" },
                                           ],
-                                        })
-                                      }
+                                        });
+                                      }}
                                       className="px-3 py-1 bg-white/10 text-white rounded hover:bg-white/20 transition-colors text-sm"
                                     >
                                       + إضافة جودة
@@ -1390,9 +1517,9 @@ const LectureDetailWithMedia = () => {
                                 setVideoFormData({
                                   title: "",
                                   duration: 0,
-                                  hours: 0,
-                                  minutes: 0,
-                                  seconds: 0,
+                                  hours: "",
+                                  minutes: "",
+                                  seconds: "",
                                   qualities: [
                                     { quality: "360", lastSegmentUrl: "" },
                                   ],
@@ -1400,7 +1527,7 @@ const LectureDetailWithMedia = () => {
                               }}
                               className="group relative bg-gradient-to-r from-gray-800/40 to-gray-900/40 backdrop-blur-sm border border-white/10 rounded-2xl p-6 cursor-pointer hover:border-cyan-500/30 hover:shadow-2xl hover:shadow-cyan-500/10 transition-all duration-500"
                             >
-                              <div className="flex gap-6 items-center">
+                              <div className="flex flex-col sm:flex-row gap-6 items-start sm:items-center">
                                 {/* Content Left */}
                                 <div className="flex-1">
                                   <div className="mb-4">
@@ -1428,7 +1555,7 @@ const LectureDetailWithMedia = () => {
                                 </div>
 
                                 {/* Icon Right */}
-                                <div className="w-20 h-20 flex-shrink-0 rounded-xl bg-gradient-to-br from-cyan-900/40 to-blue-900/40 border-2 border-cyan-500/20 flex items-center justify-center group-hover:border-cyan-500/40 transition-colors duration-300">
+                                <div className="w-full sm:w-20 h-20 flex-shrink-0 mt-4 sm:mt-0 rounded-xl bg-gradient-to-br from-cyan-900/40 to-blue-900/40 border-2 border-cyan-500/20 flex items-center justify-center group-hover:border-cyan-500/40 transition-colors duration-300">
                                   <div className="w-14 h-14 rounded-full bg-gradient-to-r from-cyan-500 to-blue-500 flex items-center justify-center shadow-lg">
                                     <FileDown className="w-8 h-8 text-white" />
                                   </div>
@@ -1552,7 +1679,7 @@ const LectureDetailWithMedia = () => {
                                 whileHover={{ y: -5 }}
                                 className="group relative bg-gradient-to-r from-gray-800/40 to-gray-900/40 backdrop-blur-sm border border-white/10 rounded-2xl p-6 hover:border-emerald-500/30 hover:shadow-2xl hover:shadow-emerald-500/10 transition-all duration-500"
                               >
-                                <div className="flex gap-6 items-center">
+                                <div className="flex flex-col sm:flex-row gap-6 items-start sm:items-center">
                                   {/* Content Left */}
                                   <div className="flex-1">
                                     <div className="flex items-center gap-3 mb-4">
@@ -1608,7 +1735,7 @@ const LectureDetailWithMedia = () => {
                                       </div>
                                     </div>
 
-                                    <div className="mt-6 flex items-center gap-4">
+                                      <div className="mt-4 sm:mt-6 flex flex-col sm:flex-row items-center gap-4">
                                       <a
                                         href={pdf.fileUrl || pdf.url || "#"}
                                         target="_blank"
@@ -1666,29 +1793,29 @@ const LectureDetailWithMedia = () => {
                                         <ChevronRight className="w-3 h-3 group-hover/view:translate-x-0.5 transition-transform" />
                                       </a>
 
-                                      <div className="flex items-center gap-2 ml-auto">
-                                        <button
-                                          onClick={() => handleEditPdf(pdf)}
-                                          className="p-1.5 hover:bg-white/10 rounded-lg transition-colors"
-                                          title="تعديل"
-                                        >
-                                          <Edit3 className="w-4 h-4 text-white/70" />
-                                        </button>
-                                        <button
-                                          onClick={() =>
-                                            handleDeletePdf(pdf._id)
-                                          }
-                                          className="p-1.5 hover:bg-red-500/10 rounded-lg transition-colors"
-                                          title="حذف"
-                                        >
-                                          <Trash2 className="w-4 h-4 text-red-400" />
-                                        </button>
-                                      </div>
+                                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:ml-auto mt-3 sm:mt-0">
+                                          <button
+                                            onClick={() => handleEditPdf(pdf)}
+                                            className="w-full sm:w-auto p-2 hover:bg-white/10 rounded-lg transition-colors text-sm flex items-center justify-center gap-2"
+                                            title="تعديل"
+                                          >
+                                            <Edit3 className="w-4 h-4 text-white/70" />
+                                            <span className="hidden sm:inline">تعديل</span>
+                                          </button>
+                                          <button
+                                            onClick={() => handleDeletePdf(pdf._id)}
+                                            className="w-full sm:w-auto p-2 hover:bg-red-500/10 rounded-lg transition-colors text-sm flex items-center justify-center gap-2"
+                                            title="حذف"
+                                          >
+                                            <Trash2 className="w-4 h-4 text-red-400" />
+                                            <span className="hidden sm:inline">حذف</span>
+                                          </button>
+                                        </div>
                                     </div>
                                   </div>
 
                                   {/* Icon Right */}
-                                  <div className="w-20 h-20 flex-shrink-0 rounded-xl bg-gradient-to-br from-emerald-900/40 to-teal-900/40 border-2 border-white/10 group-hover:border-emerald-500/30 transition-colors duration-300 flex items-center justify-center">
+                                  <div className="w-full sm:w-20 h-20 flex-shrink-0 mt-4 sm:mt-0 rounded-xl bg-gradient-to-br from-emerald-900/40 to-teal-900/40 border-2 border-white/10 group-hover:border-emerald-500/30 transition-colors duration-300 flex items-center justify-center">
                                     <div className="w-14 h-14 rounded-full bg-gradient-to-r from-emerald-500 to-teal-500 flex items-center justify-center shadow-lg">
                                       <FileText className="w-8 h-8 text-white" />
                                     </div>
@@ -1808,7 +1935,7 @@ const LectureDetailWithMedia = () => {
                                 </div>
 
                                 {/* Icon Right */}
-                                <div className="w-20 h-20 flex-shrink-0 rounded-xl bg-gradient-to-br from-emerald-900/40 to-teal-900/40 border-2 border-emerald-500/20 flex items-center justify-center group-hover:border-emerald-500/40 transition-colors duration-300">
+                                <div className="w-full sm:w-20 h-20 flex-shrink-0 mt-4 sm:mt-0 rounded-xl bg-gradient-to-br from-emerald-900/40 to-teal-900/40 border-2 border-emerald-500/20 flex items-center justify-center group-hover:border-emerald-500/40 transition-colors duration-300">
                                   <div className="w-14 h-14 rounded-full bg-gradient-to-r from-emerald-500 to-teal-500 flex items-center justify-center shadow-lg">
                                     <FileDown className="w-8 h-8 text-white" />
                                   </div>
@@ -1923,18 +2050,10 @@ const LectureDetailWithMedia = () => {
 
       {/* Fixed popover rendered on top of all content to avoid clipping by overflow */}
       {videoPopover && (
-        <div
-          style={{
-            position: "fixed",
-            left: videoPopover.left,
-            top: videoPopover.top,
-            zIndex: 9999,
-            transform: "translateX(-80px)",
-          }}
-        >
+        <div style={getPopoverStyle(videoPopover)}>
           <div
             data-viewer-popover="true"
-            className="w-64 bg-gray-900/95 text-white text-sm rounded-lg p-3 border border-white/10 shadow-lg"
+            className="w-full sm:w-64 bg-gray-900/95 text-white text-sm rounded-lg p-3 border border-white/10 shadow-lg"
           >
             <div className="font-semibold text-white/90 mb-2">
               مشاهدات الفيديو (
@@ -1945,7 +2064,7 @@ const LectureDetailWithMedia = () => {
             ) : (videoViewersMap[videoPopover.videoId] || []).length === 0 ? (
               <div className="text-white/70">لا توجد مشاهدات حتى الآن.</div>
             ) : (
-              <div className="space-y-2 viewer-scroll">
+              <div className="space-y-2 viewer-scroll max-h-72 overflow-y-auto">
                 {(videoViewersMap[videoPopover.videoId] || []).map((v) => (
                   <div key={v._id} className="flex items-start justify-between">
                     <div className="text-white/90">
@@ -1963,18 +2082,10 @@ const LectureDetailWithMedia = () => {
       )}
 
       {pdfPopover && (
-        <div
-          style={{
-            position: "fixed",
-            left: pdfPopover.left,
-            top: pdfPopover.top,
-            zIndex: 9999,
-            transform: "translateX(-80px)",
-          }}
-        >
+        <div style={getPopoverStyle(pdfPopover)}>
           <div
             data-viewer-popover="true"
-            className="w-64 bg-gray-900/95 text-white text-sm rounded-lg p-3 border border-white/10 shadow-lg"
+            className="w-full sm:w-64 bg-gray-900/95 text-white text-sm rounded-lg p-3 border border-white/10 shadow-lg"
           >
             <div className="font-semibold text-white/90 mb-2">
               مشاهدات الملف ({(pdfViewersMap[pdfPopover.pdfId] || []).length})
@@ -1984,7 +2095,7 @@ const LectureDetailWithMedia = () => {
             ) : (pdfViewersMap[pdfPopover.pdfId] || []).length === 0 ? (
               <div className="text-white/70">لا توجد مشاهدات حتى الآن.</div>
             ) : (
-              <div className="space-y-2 viewer-scroll">
+              <div className="space-y-2 viewer-scroll max-h-72 overflow-y-auto">
                 {(pdfViewersMap[pdfPopover.pdfId] || []).map((v) => (
                   <div
                     key={v._id || v.user?._id || v.userId}

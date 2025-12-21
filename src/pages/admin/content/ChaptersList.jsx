@@ -6,7 +6,7 @@ import useTitle from "../../../hooks/useTitle";
 // Keep a redirect so any existing links continue to work.
 const ChaptersList = () => {
   const { materialId } = useParams();
-  useTitle("كورساتي — الفصول (إدارة)");
+  useTitle("كورساتي — ادارة الفصول ");
   return <Navigate to={`/admin/content/materials/${materialId}`} replace />;
 };
 

@@ -235,7 +235,7 @@ const MaterialDetail = () => {
   ];
 
   return (
-    <div className="min-h-screen p-4 md:p-6">
+    <div className="min-h-screen p-4 md:p-6 max-w-7xl mx-auto">
       {/* Background Effects */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
         <div className="absolute top-20 left-1/4 w-96 h-96 bg-blue-500/10 rounded-full blur-3xl" />
@@ -246,52 +246,57 @@ const MaterialDetail = () => {
         <AdminBreadcrumb items={breadcrumbs} className="-mt-2 mb-3" />
 
         {/* Header */}
-        <div className="admin-card p-6 md:p-8 mb-8 bg-gradient-to-r from-gray-800/60 via-gray-900/60 to-gray-800/60 backdrop-blur-xl border border-white/10 rounded-3xl shadow-2xl">
-          <div className="flex flex-col md:flex-row items-center justify-between gap-4">
-            <div className="flex items-center gap-6 mb-4 md:mb-0">
+        <div className="admin-card p-4 md:p-8 mb-6 bg-gradient-to-r from-gray-800/60 via-gray-900/60 to-gray-800/60 backdrop-blur-xl border border-white/10 rounded-3xl shadow-2xl">
+          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+            <div className="w-full md:w-auto flex flex-col md:flex-row items-center md:items-center gap-4">
               {(material.thumbnailUrl || material.thumbnail) && (
-                <div className="w-full md:w-20 h-48 md:h-20 rounded-2xl overflow-hidden border-2 border-white/10 flex-shrink-0">
-                  <img
-                    src={material.thumbnailUrl || material.thumbnail}
-                    alt={material.title}
-                    className="w-full h-full object-cover"
-                  />
+                <div className="w-full sm:w-40 md:w-20 flex-shrink-0">
+                  <div className="w-full aspect-[4/3] md:aspect-square rounded-2xl overflow-hidden border-2 border-white/10 bg-white/5 flex items-center justify-center mx-auto md:mx-0">
+                    <img
+                      src={material.thumbnailUrl || material.thumbnail}
+                      alt={material.title}
+                      className="w-full h-full object-contain object-center"
+                    />
+                  </div>
                 </div>
               )}
-              <div>
-                <h1 className="text-3xl font-bold bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-500 bg-clip-text text-transparent">
+
+              <div className="flex-1 text-center md:text-left">
+                <h1 className="text-2xl md:text-3xl font-bold bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-500 bg-clip-text text-transparent leading-tight">
                   {material.title}
                 </h1>
-                <p className="text-white/60 text-sm mt-1">
+                <p className="text-white/60 text-xs md:text-sm mt-1">
                   المعرف: {material._id.slice(0, 8)}...
                 </p>
               </div>
             </div>
 
-            <div className="flex items-center gap-4 bg-gray-900/40 backdrop-blur-sm rounded-2xl p-4 border border-white/10">
-              <div className="text-center px-4">
-                <div className="text-3xl font-bold bg-gradient-to-r from-cyan-400 to-blue-400 bg-clip-text text-transparent">
-                  {instructors.length}
+            <div className="w-full md:w-auto mt-3 md:mt-0">
+              <div className="flex items-center gap-3 bg-gray-900/40 backdrop-blur-sm rounded-2xl p-3 md:p-4 border border-white/10 overflow-x-auto">
+                <div className="text-center px-3 min-w-[86px]">
+                  <div className="text-2xl md:text-3xl font-bold bg-gradient-to-r from-cyan-400 to-blue-400 bg-clip-text text-transparent">
+                    {instructors.length}
+                  </div>
+                  <div className="text-xs md:text-sm text-white/70">المدرسين</div>
                 </div>
-                <div className="text-sm text-white/70">المدرسين</div>
-              </div>
-              <div className="h-10 w-px bg-white/10"></div>
-              <div className="text-center px-4">
-                <div className="text-3xl font-bold bg-gradient-to-r from-emerald-400 to-teal-400 bg-clip-text text-transparent">
-                  {lectures.length}
+                <div className="h-8 w-px bg-white/8 hidden md:block"></div>
+                <div className="text-center px-3 min-w-[86px]">
+                  <div className="text-2xl md:text-3xl font-bold bg-gradient-to-r from-emerald-400 to-teal-400 bg-clip-text text-transparent">
+                    {lectures.length}
+                  </div>
+                  <div className="text-xs md:text-sm text-white/70">المحاضرات</div>
                 </div>
-                <div className="text-sm text-white/70">المحاضرات</div>
               </div>
             </div>
           </div>
         </div>
 
         {/* Tabs Navigation */}
-        <div className="admin-card p-2 mb-8 bg-gradient-to-r from-gray-800/40 to-gray-900/40 backdrop-blur-sm border border-white/10 rounded-2xl">
-          <div className="flex space-x-2 rtl:space-x-reverse">
+          <div className="admin-card p-2 mb-8 bg-gradient-to-r from-gray-800/40 to-gray-900/40 backdrop-blur-sm border border-white/10 rounded-2xl">
+          <div className="flex flex-wrap gap-2">
             <button
               onClick={() => setActiveTab("instructors")}
-              className={`flex-1 px-6 py-3 rounded-xl font-semibold transition-all duration-200 flex items-center justify-center gap-2 ${
+                className={`flex-1 min-w-[120px] px-6 py-3 rounded-xl font-semibold transition-all duration-200 flex items-center justify-center gap-2 ${
                 activeTab === "instructors"
                   ? "bg-gradient-to-r from-cyan-500 to-blue-500 text-white shadow-md"
                   : "text-white/60 hover:bg-white/5 hover:text-white/80"
@@ -445,36 +450,33 @@ const MaterialDetail = () => {
                         </div>
                       </div>
 
-                      {/* Image Right */}
-                      <div className="w-full h-48 md:w-32 md:h-32 flex-shrink-0 rounded-xl overflow-hidden border-2 border-white/10 group-hover:border-cyan-500/30 transition-colors duration-300">
-                        {instructor.thumbnailUrl || instructor.thumbnail ? (
-                          <img
-                            src={
-                              instructor.thumbnailUrl || instructor.thumbnail
-                            }
-                            alt={instructor.title}
-                            className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
-                          />
-                        ) : (
-                          <div className="w-full h-full bg-gradient-to-br from-blue-900/40 to-cyan-900/40 flex flex-col items-center justify-center">
-                            <svg
-                              className="w-10 h-10 text-white/30"
-                              fill="none"
-                              stroke="currentColor"
-                              viewBox="0 0 24 24"
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth={2}
-                                d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
-                              />
-                            </svg>
-                            <span className="text-xs text-white/40 mt-2">
-                              لا توجد صورة
-                            </span>
-                          </div>
-                        )}
+                      {/* Image Right (responsive aspect box) */}
+                      <div className="w-full md:w-32 flex-shrink-0">
+                        <div className="w-full aspect-[4/3] md:aspect-square rounded-xl overflow-hidden border-2 border-white/10 group-hover:border-cyan-500/30 transition-colors duration-300 bg-gradient-to-br from-blue-900/30 to-cyan-900/30 flex items-center justify-center">
+                          {instructor.thumbnailUrl || instructor.thumbnail ? (
+                            <img
+                              src={instructor.thumbnailUrl || instructor.thumbnail}
+                              alt={instructor.title}
+                              className="w-full h-full object-contain transition-transform duration-500"
+                            />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center">
+                              <svg
+                                className="w-10 h-10 text-white/30"
+                                fill="none"
+                                stroke="currentColor"
+                                viewBox="0 0 24 24"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  strokeWidth={2}
+                                  d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
+                                />
+                              </svg>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -995,12 +997,12 @@ const MaterialDetail = () => {
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-start">
                   {/* Preview */}
                   <div className="md:col-span-1 flex items-center justify-center">
-                    <div className="w-48 h-48 rounded-xl overflow-hidden border-2 border-white/10 bg-white/5 flex items-center justify-center">
+                    <div className="w-full sm:w-48 aspect-[4/3] sm:aspect-square rounded-xl overflow-hidden border-2 border-white/10 bg-white/5 flex items-center justify-center">
                       {editData.thumbnail ? (
                         <img
                           src={editData.thumbnail}
                           alt={editData.title || "غلاف المادة"}
-                          className="w-full h-full object-cover"
+                          className="w-full h-full object-contain object-center"
                         />
                       ) : (
                         <div className="text-center p-4 text-white/40">

@@ -95,7 +95,18 @@ export const treeAPI = {
 // Materials API
 export const materialAPI = {
   createMaterial: (title, thumbnailUrl, order) =>
-    api.post("/api/materials", { title, thumbnailUrl, order }),
+    // support File upload for thumbnail
+    (thumbnailUrl && typeof File !== "undefined" && thumbnailUrl instanceof File
+      ? (() => {
+          const fd = new FormData();
+          fd.append("thumbnail", thumbnailUrl);
+          fd.append("title", title);
+          fd.append("order", order ?? 0);
+          return api.post("/api/materials", fd, {
+            headers: { "Content-Type": "multipart/form-data" },
+          });
+        })()
+      : api.post("/api/materials", { title, thumbnailUrl, order })),
   getAllMaterials: () => api.get("/api/materials"),
   getAllMaterials: () =>
     getCached(
@@ -104,8 +115,19 @@ export const materialAPI = {
       30000,
     ),
   getMaterialById: (id) => api.get(`/api/materials/${id}`),
-  updateMaterial: (id, title, thumbnailUrl, order) =>
-    api.put(`/api/materials/${id}`, { title, thumbnailUrl, order }),
+  updateMaterial: (id, title, thumbnailUrl, order) => {
+    // If a File is provided, use multipart/form-data so backend multer can handle it
+    if (thumbnailUrl && typeof File !== "undefined" && thumbnailUrl instanceof File) {
+      const fd = new FormData();
+      fd.append("thumbnail", thumbnailUrl);
+      fd.append("title", title);
+      fd.append("order", order ?? 0);
+      return api.put(`/api/materials/${id}`, fd, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+    }
+    return api.put(`/api/materials/${id}`, { title, thumbnailUrl, order });
+  },
   deleteMaterial: (id) => api.delete(`/api/materials/${id}`),
   // Try to get count of students registered to a material (backend may not implement)
   getStudentsCount: (id) => api.get(`/api/materials/${id}/students-count`),
