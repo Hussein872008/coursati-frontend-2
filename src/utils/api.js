@@ -299,6 +299,13 @@ export const adminAPI = {
   getActivity: (limit = 20) => api.get(`/api/admin/activity?limit=${limit}`),
   getTimeSeries: (days = 30) =>
     api.get(`/api/admin/stats/timeseries?days=${days}`),
+  getLectureByIdAdmin: (id) => api.get(`/api/admin/lectures/${id}`),
+  validateAllVideos: (mirror = false) => api.post('/api/admin/videos/validate-all', { mirror }),
+  getValidateJob: (jobId) => api.get(`/api/admin/videos/validate-all/${jobId}`),
+  pauseValidateJob: (jobId) => api.post(`/api/admin/videos/validate-all/${jobId}/pause`),
+  resumeValidateJob: (jobId) => api.post(`/api/admin/videos/validate-all/${jobId}/resume`),
+  revalidateJobVideo: (jobId, videoId) => api.post(`/api/admin/videos/validate-all/${jobId}/revalidate/${videoId}`),
+  getAllVideos: () => api.get('/api/admin/videos'),
 };
 
 // PDFs API

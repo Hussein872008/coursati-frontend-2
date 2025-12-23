@@ -34,6 +34,7 @@ const InstructorDetail = lazy(
 );
 const ChapterDetail = lazy(() => import("./pages/admin/content/ChapterDetail"));
 const LectureDetail = lazy(() => import("./pages/admin/content/LectureDetail"));
+const AdminLectureRedirect = lazy(() => import("./pages/admin/content/AdminLectureRedirect"));
 
 // Loading fallback component
 const LoadingFallback = () => (
@@ -212,7 +213,15 @@ export const router = createBrowserRouter([
     path: "/chapter/:chapterId/lecture/:lectureId",
     element: (
       <ProtectedRoute>
-        <LectureContentPage />
+        <Suspense
+          fallback={
+            <div className="min-h-screen flex items-center justify-center">
+              Loading...
+            </div>
+          }
+        >
+          <LectureContentPage />
+        </Suspense>
       </ProtectedRoute>
     ),
   },
@@ -295,6 +304,14 @@ export const router = createBrowserRouter([
         element: (
           <Suspense fallback={<LoadingFallback />}>
             <LectureDetail />
+          </Suspense>
+        ),
+      },
+      {
+        path: "content/lecture/:lectureId",
+        element: (
+          <Suspense fallback={<LoadingFallback />}>
+            <AdminLectureRedirect />
           </Suspense>
         ),
       },

@@ -4,7 +4,6 @@ import React, {
   useState,
   useCallback,
 } from "react";
-import { videosAPI } from "../utils/api";
 import api from "../utils/api";
 import { useAuth } from "../hooks/useAuth";
 
@@ -30,6 +29,7 @@ function VideoPlayer({ video }) {
   const [speedMenuOpen, setSpeedMenuOpen] = useState(false);
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [fullscreenBottomInset, setFullscreenBottomInset] = useState(0);
   const [currentQuality, setCurrentQuality] = useState(null);
   const [shouldInit, setShouldInit] = useState(true);
 
@@ -75,13 +75,15 @@ function VideoPlayer({ video }) {
   const progressDragStartXRef = useRef(0);
   const progressDragStartTimeRef = useRef(0);
   const lastRenderedTimeRef = useRef(0);
-  const fragRetriesRef = useRef({});
-  const mediaErrorRetriesRef = useRef(0);
-  const globalRetriesRef = useRef(0);
-  const maxGlobalRetries = 3;
+  const savedPosRef = useRef(null);
+  const wasPlayingRef = useRef(false);
   const qualityOpenRef = useRef(false);
   const speedOpenRef = useRef(false);
   const settingsOpenRef = useRef(false);
+  // When toggling menus we briefly ignore the global document click
+  // handler to avoid the menu closing immediately after opening.
+  const ignoreDocClickRef = useRef(false);
+  const [settingsMenuPos, setSettingsMenuPos] = useState(null);
 
   const { user, isLoggedIn } = useAuth();
 
@@ -118,9 +120,9 @@ function VideoPlayer({ video }) {
 
   // عرض ردود الفعل المرئية
   const showActionFeedback = useCallback((icon, text, timeout = 800) => {
-    setActionFeedback({ visible: true, icon, text });
+    setActionFeedback({ visible: true, icon, text, position: 'center' });
     setTimeout(
-      () => setActionFeedback({ visible: false, icon: null, text: "" }),
+      () => setActionFeedback({ visible: false, icon: null, text: "", position: 'center' }),
       timeout,
     );
   }, []);
@@ -131,6 +133,15 @@ function VideoPlayer({ video }) {
     setTimeout(() => {
       setSeekFeedback({ visible: false, type: "", time: "" });
     }, 800);
+  }, []);
+
+  // enhanced action feedback that supports positioning: 'center' | 'left' | 'right'
+  const showActionFeedbackPos = useCallback((icon, text, timeout = 800, position = 'center') => {
+    setActionFeedback({ visible: true, icon, text, position });
+    setTimeout(
+      () => setActionFeedback({ visible: false, icon: null, text: "", position: 'center' }),
+      timeout,
+    );
   }, []);
 
   const showRateFeedback = useCallback((rate) => {
@@ -266,12 +277,24 @@ function VideoPlayer({ video }) {
     try {
       const v = videoRef.current;
       if (!v) return;
-      v.style.width = "100%";
-      v.style.height = "100%";
-      v.style.objectFit = isFullscreen ? "cover" : "contain";
-      v.style.maxWidth = "100%";
-      v.style.maxHeight = "100%";
-      v.style.display = "block";
+      if (isFullscreen) {
+        // In fullscreen fit by height so the whole video height is visible
+        v.style.width = "auto";
+        v.style.height = "100%";
+        v.style.objectFit = "contain"; // ensure the entire frame is visible
+        v.style.maxWidth = "100%";
+        v.style.maxHeight = "100%";
+        v.style.display = "block";
+        v.style.margin = "0 auto";
+      } else {
+        v.style.width = "100%";
+        v.style.height = "100%";
+        v.style.objectFit = "contain";
+        v.style.maxWidth = "100%";
+        v.style.maxHeight = "100%";
+        v.style.display = "block";
+        v.style.margin = "0";
+      }
     } catch (e) {
       console.warn("Update video sizing error:", e);
     }
@@ -351,6 +374,56 @@ function VideoPlayer({ video }) {
     scheduleHideControls(1000);
   }, [scheduleHideControls]);
 
+  // تطبيق الجودة على HLS
+  const applyQualityToHls = useCallback((hls, quality) => {
+    if (!hls || !hls.levels || !quality) return;
+    const target = RES_MAP[String(quality)];
+    // prefer exact height match if possible
+    let bestIdx = -1;
+    if (target) {
+      for (let i = 0; i < hls.levels.length; i++) {
+        const lvl = hls.levels[i];
+        const h = lvl?.height || 0;
+        if (String(h) === String(target.h)) {
+          bestIdx = i;
+          break;
+        }
+      }
+    }
+
+    // fallback: choose closest height (ignore zero-height variants where possible)
+    if (bestIdx < 0) {
+      let bestDiff = Infinity;
+      for (let i = 0; i < hls.levels.length; i++) {
+        const lvl = hls.levels[i];
+        const h = lvl?.height || 0;
+        // if all levels have height=0, we'll still pick the smallest diff (0)
+        const diff = Math.abs((target ? target.h : Number(quality)) - h);
+        if (diff < bestDiff) {
+          bestDiff = diff;
+          bestIdx = i;
+        }
+      }
+    }
+
+    if (bestIdx >= 0) {
+      try {
+        // disable automatic ABR
+        try { hls.autoLevelEnabled = false; } catch (e) {}
+        // request the chosen level for the next fragment
+        try { hls.nextLevel = bestIdx; } catch (e) {}
+        // also set currentLevel to enforce immediate switch
+        try { hls.currentLevel = bestIdx; } catch (e) {}
+        // re-apply shortly in case hls overwrites during switches
+        setTimeout(() => {
+          try { hls.currentLevel = bestIdx; } catch (e) {}
+        }, 250);
+      } catch (e) {
+        console.warn('applyQualityToHls error:', e);
+      }
+    }
+  }, []);
+
   // تغيير جودة الفيديو
   const handleQualityChangePersist = useCallback((q) => {
     try {
@@ -358,30 +431,77 @@ function VideoPlayer({ video }) {
     } catch (e) {}
     setCurrentQuality(q);
     setQualityMenuOpen(false);
-  }, [video]);
 
-  // تطبيق الجودة على HLS
-  const applyQualityToHls = useCallback((hls, quality) => {
-    if (!hls || !hls.levels || !quality) return;
-    const target = RES_MAP[String(quality)];
-    if (!target) return;
-    let bestIdx = -1;
-    let bestDiff = Infinity;
-    hls.levels.forEach((lvl, idx) => {
-      const h = lvl?.height || 0;
-      const diff = Math.abs(h - target.h);
-      if (diff < bestDiff) {
-        bestDiff = diff;
-        bestIdx = idx;
-      }
-    });
-    if (bestIdx >= 0) {
+    // Immediately apply the chosen quality: either instruct Hls.js to switch
+    // or replace the native HLS src (browsers like Safari).
+    try {
+      const uc = localStorage.getItem("userCode");
+      const did = localStorage.getItem("deviceId");
+      const st = localStorage.getItem("sessionToken");
+      const qsParts = [];
+      if (uc) qsParts.push(`userCode=${encodeURIComponent(uc)}`);
+      if (did) qsParts.push(`deviceId=${encodeURIComponent(did)}`);
+      if (st) qsParts.push(`sessionToken=${encodeURIComponent(st)}`);
+      const relativePath = `/api/videos/${video._id}/playlist/${encodeURIComponent(q)}.m3u8${qsParts.length ? `?${qsParts.join('&')}` : ''}`;
+      const API_BASE = import.meta.env.VITE_API_BASE || '';
+      const base = API_BASE ? API_BASE.replace(/\/$/, '') : '';
+      const playlistUrl = base ? `${base}${relativePath}` : relativePath;
+
+      // preserve current playback position and play-state
       try {
-        hls.currentLevel = bestIdx;
-        hls.autoLevelEnabled = false;
-      } catch (e) {}
+        const v = videoRef.current;
+        savedPosRef.current = v ? (v.currentTime || 0) : 0;
+        wasPlayingRef.current = v ? (!v.paused && !v.ended) : false;
+      } catch (e) {
+        savedPosRef.current = null;
+        wasPlayingRef.current = false;
+      }
+
+      const onLoadedMeta = () => {
+        try {
+          const v = videoRef.current;
+          if (v && savedPosRef.current != null && !isNaN(savedPosRef.current)) {
+            try { v.currentTime = savedPosRef.current; } catch (e) {}
+          }
+          if (wasPlayingRef.current) {
+            try { safePlay(); } catch (e) {}
+          }
+        } catch (e) {}
+        try { videoRef.current && videoRef.current.removeEventListener('loadedmetadata', onLoadedMeta); } catch (e) {}
+        savedPosRef.current = null;
+        wasPlayingRef.current = false;
+      };
+      try { videoRef.current && videoRef.current.addEventListener('loadedmetadata', onLoadedMeta); } catch (e) {}
+
+      if (hlsRef.current) {
+        try {
+          // Force HLS.js to load the playlist for the requested quality
+          console.debug && console.debug('HLS: loading playlist for quality', q, playlistUrl);
+          try { hlsRef.current.autoLevelEnabled = false; } catch (e) {}
+          try { hlsRef.current.loadSource(playlistUrl); } catch (e) {}
+          try { hlsRef.current.attachMedia(videoRef.current); } catch (e) {}
+          // also attempt explicit level selection as a fallback
+          try { applyQualityToHls(hlsRef.current, q); } catch (e) {}
+        } catch (e) {}
+      } else if (videoRef.current) {
+        const v = videoRef.current;
+        const wasPlaying = !!(v && !v.paused && !v.ended);
+        try { v.pause(); } catch (e) {}
+        try {
+          v.removeAttribute('src');
+          v.src = playlistUrl;
+          v.load();
+        } catch (e) {}
+        if (wasPlaying) {
+          setTimeout(() => {
+            try { v.play(); } catch (e) {}
+          }, 120);
+        }
+      }
+    } catch (e) {
+      console.warn('Apply quality error:', e);
     }
-  }, []);
+  }, [video, applyQualityToHls]);
 
   // التعديل على سرعة التشغيل
   const adjustRate = useCallback((delta) => {
@@ -532,6 +652,10 @@ function VideoPlayer({ video }) {
 
           hls.on(HlsModule.Events.MANIFEST_PARSED, () => {
             setLoading(false);
+            // Apply saved/default quality once manifest (levels) are available
+            try {
+              if (defaultQuality) applyQualityToHls(hls, defaultQuality);
+            } catch (e) {}
             safePlay();
           });
 
@@ -689,6 +813,58 @@ function VideoPlayer({ video }) {
     return () => clearHideControls();
   }, [showControls, qualityMenuOpen, speedMenuOpen, settingsMenuOpen, scheduleHideControls, clearHideControls]);
 
+  // compute an estimated bottom inset for fullscreen on mobile
+  useEffect(() => {
+    if (!isFullscreen) {
+      setFullscreenBottomInset(0);
+      return;
+    }
+    const computeInset = () => {
+      try {
+        const vvh = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
+        const inset = Math.max(0, window.innerHeight - vvh) || 0;
+        setFullscreenBottomInset(inset);
+
+        // ensure the fullscreen container fills the visible viewport height
+        try {
+          const container = containerRef.current;
+          if (container) {
+            if (isFullscreen) {
+              const heightPx = Math.max(0, vvh);
+              container.style.height = `${heightPx}px`;
+              container.style.maxHeight = `${heightPx}px`;
+            } else {
+              container.style.removeProperty('height');
+              container.style.removeProperty('max-height');
+            }
+          }
+        } catch (e) {}
+      } catch (e) {
+        setFullscreenBottomInset(0);
+      }
+    };
+
+    computeInset();
+    window.addEventListener("resize", computeInset);
+    if (window.visualViewport && window.visualViewport.addEventListener) {
+      window.visualViewport.addEventListener("resize", computeInset);
+    }
+    return () => {
+      window.removeEventListener("resize", computeInset);
+      if (window.visualViewport && window.visualViewport.removeEventListener) {
+        window.visualViewport.removeEventListener("resize", computeInset);
+      }
+      // cleanup container styles on exit
+      try {
+        const container = containerRef.current;
+        if (container) {
+          container.style.removeProperty('height');
+          container.style.removeProperty('max-height');
+        }
+      } catch (e) {}
+    };
+  }, [isFullscreen]);
+
   // مزامنة مستوى الصوت
   useEffect(() => {
     try {
@@ -722,19 +898,19 @@ function VideoPlayer({ video }) {
           // predict the resulting state so feedback is immediate
           const willPlay = videoRef.current ? (videoRef.current.paused || false) : !isPlaying;
           togglePlayPause();
-          showActionFeedback(willPlay ? Icons.PlayArrow : Icons.PauseCircle, willPlay ? "تشغيل" : "إيقاف");
+          // suppress center action feedback for play/pause since center button already shows state
           break;
         case "ArrowRight":
           e.preventDefault();
           v.currentTime = Math.min(v.duration || 0, v.currentTime + 5);
           setCurrentTime(v.currentTime);
-          showActionFeedback(Icons.Forward10, "+5s");
+          showActionFeedbackPos(Icons.Forward10, "+5s", 800, 'right');
           break;
         case "ArrowLeft":
           e.preventDefault();
           v.currentTime = Math.max(0, v.currentTime - 5);
           setCurrentTime(v.currentTime);
-          showActionFeedback(Icons.Replay10, "-5s");
+          showActionFeedbackPos(Icons.Replay10, "-5s", 800, 'left');
           break;
         case "ArrowUp":
           e.preventDefault();
@@ -844,6 +1020,7 @@ function VideoPlayer({ video }) {
   // إغلاق القوائم عند النقر خارجها
   useEffect(() => {
     const onDocClick = (e) => {
+      if (ignoreDocClickRef.current) return;
       if (qualityMenuOpen && qualityRef.current && !qualityRef.current.contains(e.target)) {
         setQualityMenuOpen(false);
       }
@@ -868,6 +1045,21 @@ function VideoPlayer({ video }) {
       document.removeEventListener("keydown", onEsc);
     };
   }, [qualityMenuOpen, speedMenuOpen, settingsMenuOpen]);
+
+  // Close the small fixed settings menu on scroll/resize to avoid misplaced popovers
+  useEffect(() => {
+    if (!settingsMenuOpen) return;
+    const onClose = () => {
+      setSettingsMenuOpen(false);
+      setSettingsMenuPos(null);
+    };
+    window.addEventListener('resize', onClose);
+    window.addEventListener('scroll', onClose, true);
+    return () => {
+      window.removeEventListener('resize', onClose);
+      window.removeEventListener('scroll', onClose, true);
+    };
+  }, [settingsMenuOpen]);
 
   // تحديث أبعاد الفيديو عند تغيير الجودة أو وضع ملء الشاشة
   useEffect(() => {
@@ -990,9 +1182,10 @@ function VideoPlayer({ video }) {
   return (
     <div className="space-y-2 relative">
       <div
-        className={`relative w-full bg-gradient-to-br from-gray-900 to-black rounded-xl overflow-hidden 
-          ${isFullscreen ? "fixed inset-0 z-50 rounded-none" : "aspect-video max-h-[70vh] shadow-lg"}`}
+        className={`relative w-full bg-gradient-to-br from-gray-900 to-black rounded-xl 
+          ${isFullscreen ? "fixed inset-0 z-50 rounded-none overflow-visible" : "aspect-video max-h-[70vh] shadow-lg overflow-hidden"}`}
         ref={containerRef}
+        style={isFullscreen ? { paddingBottom: `calc(env(safe-area-inset-bottom, 0px) + 1.5rem + ${fullscreenBottomInset}px)` } : undefined}
         onClick={(e) => {
           try {
             const cx = e.clientX;
@@ -1070,10 +1263,28 @@ function VideoPlayer({ video }) {
         )}
 
         {/* ردود الفعل المرئية */}
-        {actionFeedback.visible && (
+        {actionFeedback.visible && actionFeedback.position === 'center' && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-40">
             <div className="flex flex-col items-center gap-2 bg-black/40 text-white/95 px-4 py-3 rounded-xl backdrop-blur-sm">
               <div className="text-3xl">{actionFeedback.icon ? actionFeedback.icon() : null}</div>
+              <div className="text-sm font-medium">{actionFeedback.text}</div>
+            </div>
+          </div>
+        )}
+
+        {actionFeedback.visible && actionFeedback.position === 'left' && (
+          <div className="absolute top-1/2 left-6 transform -translate-y-1/2 pointer-events-none z-40">
+            <div className="flex flex-col items-center gap-2 bg-black/40 text-white/95 px-3 py-2 rounded-xl backdrop-blur-sm">
+              <div className="text-2xl">{actionFeedback.icon ? actionFeedback.icon() : null}</div>
+              <div className="text-sm font-medium">{actionFeedback.text}</div>
+            </div>
+          </div>
+        )}
+
+        {actionFeedback.visible && actionFeedback.position === 'right' && (
+          <div className="absolute top-1/2 right-6 transform -translate-y-1/2 pointer-events-none z-40">
+            <div className="flex flex-col items-center gap-2 bg-black/40 text-white/95 px-3 py-2 rounded-xl backdrop-blur-sm">
+              <div className="text-2xl">{actionFeedback.icon ? actionFeedback.icon() : null}</div>
               <div className="text-sm font-medium">{actionFeedback.text}</div>
             </div>
           </div>
@@ -1109,7 +1320,10 @@ function VideoPlayer({ video }) {
 
         {/* تقدم التحميل */}
         {isDownloading && downloadProgress != null && (
-          <div className="absolute left-1/2 -translate-x-1/2 bottom-4 z-40 pointer-events-none w-2/5">
+          <div
+            className="absolute left-1/2 -translate-x-1/2 bottom-4 z-40 pointer-events-none w-2/5"
+            style={isFullscreen ? { bottom: `calc(1rem + env(safe-area-inset-bottom) + ${fullscreenBottomInset}px)` } : undefined}
+          >
             <div className="w-full h-2 bg-white/20 rounded-full overflow-hidden shadow-inner">
               <div
                 className="h-full bg-cyan-500 transition-all"
@@ -1138,17 +1352,17 @@ function VideoPlayer({ video }) {
 
         {/* عناصر التحكم المركزية */}
         {showControls && (
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-50">
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-[99999]">
             <div className="flex items-center gap-3 sm:gap-4 md:gap-6 pointer-events-auto">
               <button
                 type="button"
                 aria-label="تأخير 5 ث"
-                onClick={() => {
+                  onClick={() => {
                   const v = videoRef.current;
                   if (!v) return;
                   v.currentTime = Math.max(0, (v.currentTime || 0) - 5);
                   setCurrentTime(v.currentTime);
-                  showActionFeedback(Icons.Replay10, "-5s");
+                  showActionFeedbackPos(Icons.Replay10, "-5s", 800, 'left');
                 }}
                 className="flex items-center justify-center w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-black/60 text-white shadow-lg transition-transform hover:scale-110"
               >
@@ -1160,7 +1374,7 @@ function VideoPlayer({ video }) {
                 aria-label={isPlaying ? "إيقاف" : "تشغيل"}
                 onClick={togglePlayPause}
                 ref={centerPlayRef}
-                className="flex items-center justify-center w-16 h-16 md:w-20 md:h-20 rounded-full bg-gradient-to-br from-red-600 to-red-700 text-white shadow-2xl transition-transform hover:scale-110"
+                className="flex items-center justify-center w-16 h-16 md:w-20 md:h-20 rounded-full bg-gradient-to-br from-red-600 to-red-700 text-white shadow-2xl transition-transform hover:scale-110 z-[99999]"
               >
                 {isPlaying ? <Icons.PauseCircle /> : <Icons.PlayArrow />}
               </button>
@@ -1173,9 +1387,9 @@ function VideoPlayer({ video }) {
                   if (!v) return;
                   v.currentTime = Math.min((v.duration || 0), (v.currentTime || 0) + 5);
                   setCurrentTime(v.currentTime);
-                  showActionFeedback(Icons.Forward10, "+5s");
+                  showActionFeedbackPos(Icons.Forward10, "+5s", 800, 'right');
                 }}
-                className="flex items-center justify-center w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-black/60 text-white shadow-lg transition-transform hover:scale-110"
+                className="flex items-center justify-center w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-black/60 text-white shadow-lg transition-transform hover:scale-110 z-[99999]"
               >
                 <Icons.Forward10 />
               </button>
@@ -1186,6 +1400,7 @@ function VideoPlayer({ video }) {
         {/* شريط التقدم */}
         <div
           className={`absolute left-0 right-0 bottom-16 px-2 transition-opacity duration-200 z-50 bg-black/20 backdrop-blur-sm rounded-md ${showControls ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"}`}
+          style={isFullscreen ? { bottom: `calc(4rem + env(safe-area-inset-bottom) + ${fullscreenBottomInset}px)` } : undefined}
         >
           <div className="flex items-center gap-3">
             <div className="text-white/90 font-medium text-sm">
@@ -1270,7 +1485,10 @@ function VideoPlayer({ video }) {
         </div>
 
         {/* زر ملء الشاشة */}
-        <div className={`absolute left-4 bottom-6 z-[9999] transition-opacity duration-200 ${showControls ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"}`}>
+        <div
+          className={`absolute left-4 bottom-6 z-[9999999] transition-opacity duration-200 ${showControls ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"}`}
+          style={isFullscreen ? { bottom: `calc(1.5rem + env(safe-area-inset-bottom) + ${fullscreenBottomInset}px)` } : undefined}
+        >
           <button
             type="button"
             onClick={toggleFullscreen}
@@ -1284,7 +1502,7 @@ function VideoPlayer({ video }) {
 
         {/* عناصر التحكم السفلية */}
         <div
-          className={`absolute left-0 right-0 bottom-4 px-2 transition-opacity duration-200 z-50 bg-black/20 backdrop-blur-sm rounded-md ${showControls ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"}`}
+          className={`absolute left-0 right-0 bottom-4 px-2 transition-opacity duration-200 z-[99999] bg-black/20 backdrop-blur-sm rounded-md ${showControls ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"}`}
         >
           <div className="flex flex-row items-center justify-between gap-2 sm:gap-3">
             <div className="flex items-center gap-2 sm:gap-3 flex-wrap w-full sm:w-auto justify-start">
@@ -1335,10 +1553,13 @@ function VideoPlayer({ video }) {
               {/* قائمة الجودة (لشاشات كبيرة) */}
               <div className="relative hidden sm:block" ref={qualityRef}>
                 <button
-                  onClick={() => {
+                  onClick={(e) => {
+                    e.stopPropagation();
                     setQualityMenuOpen(!qualityMenuOpen);
                     setSpeedMenuOpen(false);
                     setSettingsMenuOpen(false);
+                    ignoreDocClickRef.current = true;
+                    setTimeout(() => (ignoreDocClickRef.current = false), 50);
                   }}
                   className="flex items-center gap-2 rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-2 py-1 shadow-lg border border-white/10 min-w-[36px] h-8 sm:min-w-[44px] sm:h-10 transition-transform hover:scale-105 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
                   aria-expanded={qualityMenuOpen}
@@ -1370,10 +1591,13 @@ function VideoPlayer({ video }) {
               {/* قائمة السرعة (لشاشات كبيرة) */}
               <div className="relative hidden sm:block" ref={speedRef}>
                 <button
-                  onClick={() => {
+                  onClick={(e) => {
+                    e.stopPropagation();
                     setSpeedMenuOpen(!speedMenuOpen);
                     setQualityMenuOpen(false);
                     setSettingsMenuOpen(false);
+                    ignoreDocClickRef.current = true;
+                    setTimeout(() => (ignoreDocClickRef.current = false), 50);
                   }}
                   className="flex items-center gap-2 rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-2 py-1 shadow-lg border border-white/10 min-w-[36px] h-8 sm:min-w-[44px] sm:h-10 transition-transform hover:scale-105 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
                   aria-expanded={speedMenuOpen}
@@ -1425,10 +1649,29 @@ function VideoPlayer({ video }) {
               {/* قائمة الإعدادات (لشاشات صغيرة) */}
               <div className="relative sm:hidden" ref={settingsRef}>
                 <button
-                  onClick={() => {
-                    setSettingsMenuOpen(!settingsMenuOpen);
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const willOpen = !settingsMenuOpen;
                     setQualityMenuOpen(false);
                     setSpeedMenuOpen(false);
+                    ignoreDocClickRef.current = true;
+                    setTimeout(() => (ignoreDocClickRef.current = false), 50);
+                    // compute position anchored to the settings button
+                    try {
+                      const rect = settingsRef.current && settingsRef.current.getBoundingClientRect();
+                      const MENU_W = 112; // w-28 in px (approx)
+                      if (rect) {
+                        const left = Math.max(8, Math.min(rect.left, (window.innerWidth || 0) - MENU_W - 8));
+                        const top = rect.bottom + 6; // place below the button
+                        setSettingsMenuPos({ left, top });
+                      } else {
+                        setSettingsMenuPos(null);
+                      }
+                    } catch (err) {
+                      setSettingsMenuPos(null);
+                    }
+                    setSettingsMenuOpen(willOpen);
+                    if (!willOpen) setSettingsMenuPos(null);
                   }}
                   className="flex items-center justify-center rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-2 py-1 shadow-lg border border-white/10 min-w-[36px] h-8 transition-transform hover:scale-105 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
                   aria-label="الإعدادات"
@@ -1436,8 +1679,11 @@ function VideoPlayer({ video }) {
                   <Icons.Settings />
                 </button>
                 {settingsMenuOpen && (
-                  <div className="absolute bottom-12 right-0 bg-gradient-to-b from-gray-900 to-black border border-white/10 rounded-xl shadow-2xl py-2 z-50 w-56 backdrop-blur-lg">
-                    <div className="px-3 py-2 text-sm text-white/80">الجودة</div>
+                  <div
+                    className="fixed bg-gradient-to-b from-gray-900 to-black border border-white/10 rounded-md shadow-2xl py-1 z-[99999] w-28 max-h-36 overflow-y-auto backdrop-blur-lg"
+                    style={settingsMenuPos ? { left: `${settingsMenuPos.left}px`, top: `${settingsMenuPos.top}px` } : { right: '0.75rem', bottom: '5rem' }}
+                  >
+                    <div className="px-2 pt-1 text-[10px] text-white/80">الجودة</div>
                     {video &&
                       video.qualities &&
                       [...video.qualities]
@@ -1446,13 +1692,16 @@ function VideoPlayer({ video }) {
                           <button
                             key={q.quality}
                             onClick={() => handleQualityChangePersist(q.quality)}
-                            className={`w-full text-right px-5 py-2 text-sm ${String(q.quality) === String(currentQuality) ? "bg-gradient-to-r from-red-600 to-red-800 text-white font-semibold" : "text-white/80"}`}
+                            className={`w-full text-right px-2 py-0.5 text-[11px] ${String(q.quality) === String(currentQuality) ? "bg-gradient-to-r from-red-600 to-red-800 text-white font-semibold" : "text-white/80"}`}
                           >
                             {q.quality}p
                           </button>
                         ))}
-                    <div className="px-3 py-2 text-sm text-white/80">السرعة</div>
-                    <div className="px-3 py-2">
+                    <div className="px-2 pt-1 text-[10px] text-white/80 flex items-center justify-between">
+                      <div>السرعة</div>
+                      <div className="font-semibold text-white text-[11px]">{playbackRate.toFixed(2)}x</div>
+                    </div>
+                    <div className="px-2 pb-2 pt-0.5">
                       <input
                         type="range"
                         min="0.25"

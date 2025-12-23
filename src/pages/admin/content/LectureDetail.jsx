@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import useTitle from "../../../hooks/useTitle";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useLocation } from "react-router-dom";
 import api, { pdfsAPI, lecturesAPI, videosAPI } from "../../../utils/api";
 import AdminBreadcrumb from "../../../components/admin/AdminBreadcrumb";
 import CloudinaryImageInput from "../../../components/CloudinaryImageInput";
@@ -112,6 +112,24 @@ const LectureDetailWithMedia = () => {
     loadPdfs();
     loadVideos();
   }, [materialId, instructorId, chapterId, lectureId]);
+
+  // handle external highlight query param: scroll to and briefly highlight a video
+  const location = useLocation();
+  useEffect(() => {
+    const q = new URLSearchParams(location.search);
+    const highlight = q.get('highlight');
+    if (!highlight) return;
+    if (!videos || videos.length === 0) return;
+    // small timeout to ensure DOM rendered
+    setTimeout(() => {
+      const el = document.getElementById(`video-${highlight}`);
+      if (el) {
+        try { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch(e){}
+        el.classList.add('ring-4','ring-amber-400');
+        setTimeout(() => { el.classList.remove('ring-4','ring-amber-400'); }, 4500);
+      }
+    }, 300);
+  }, [location.search, videos]);
 
   // Helper: responsive popover style (full-width on small screens)
   const getPopoverStyle = (p) => {
@@ -1127,6 +1145,7 @@ const LectureDetailWithMedia = () => {
                                   animate={{ opacity: 1, y: 0 }}
                                   transition={{ delay: index * 0.05 }}
                                   whileHover={{ y: -5 }}
+                                  id={`video-${video._id}`}
                                   className="group relative bg-gradient-to-r from-gray-800/40 to-gray-900/40 backdrop-blur-sm border border-white/10 rounded-2xl p-6 hover:border-cyan-500/30 hover:shadow-2xl hover:shadow-cyan-500/10 transition-all duration-500"
                                 >
                                   <div className="flex gap-6 items-center">
