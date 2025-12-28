@@ -17,6 +17,9 @@ import {
   PlayCircleIcon,
   DocumentTextIcon,
   AcademicCapIcon,
+  XCircleIcon,
+  ArrowPathIcon,
+  EnvelopeIcon,
 } from "@heroicons/react/24/outline";
 import useTitle from "../../hooks/useTitle";
 
@@ -32,6 +35,10 @@ const ChapterLecturesPage = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedLectureId, setSelectedLectureId] = useState(null);
+  const [unavailableModal, setUnavailableModal] = useState({ open: false, lecture: null, videos: [] });
+  const [lectureAvailability, setLectureAvailability] = useState({});
+  const [availLoadingIds, setAvailLoadingIds] = useState(new Set());
+  const [showDebugAvail, setShowDebugAvail] = useState(false);
   const playerRef = React.useRef(null);
 
   // States for PDFs
@@ -98,6 +105,56 @@ const ChapterLecturesPage = () => {
     }
   }, [chapterId]);
 
+  // After chapter loads, fetch videos for lectures that don't embed `videos` so we can
+  // compute availability badges on the lecture cards (show broken count or all-broken)
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        if (!chapter || !Array.isArray(chapter.lectures)) return;
+        const availMap = {};
+        // Fetch videos for lectures that don't include full `videos` arrays
+        await Promise.all(
+          chapter.lectures.map(async (lec) => {
+            try {
+              // Prefer authoritative server-side availability check for all lectures.
+              try {
+                const res = await videosAPI.getLectureAvailability(lec._id);
+                const data = res && res.data;
+                if (data && data.ok) {
+                  const total = data.total || 0;
+                  const broken = data.broken || 0;
+                  availMap[lec._id] = { total, broken, allBroken: total > 0 && broken === total, perVideo: data.perVideo };
+                  return;
+                }
+              } catch (e) {
+                // fallback to local embedded videos when public endpoint fails
+              }
+
+              if (Array.isArray(lec.videos) && lec.videos.length > 0) {
+                const vids = lec.videos;
+                let broken = 0;
+                const total = vids.length;
+                vids.forEach((v) => {
+                  const quals = Array.isArray(v.qualities) ? v.qualities : [];
+                  const available = quals.some((q) => q && (q.lastSegmentUrl || q.url));
+                  if (!available) broken += 1;
+                });
+                availMap[lec._id] = { total, broken, allBroken: total > 0 && broken === total };
+              }
+            } catch (e) {
+              // ignore per-lecture fetch errors
+            }
+          }),
+        );
+        if (mounted) setLectureAvailability(availMap);
+      } catch (e) {
+        // ignore
+      }
+    })();
+    return () => { mounted = false; };
+  }, [chapter]);
+
   // تحميل ملفات PDF للمحاضرة المختارة
   useEffect(() => {
     const loadPDFs = async () => {
@@ -137,6 +194,30 @@ const ChapterLecturesPage = () => {
         const lectureFromChapter = chapter?.lectures?.find(
           (l) => l._id === selectedLectureId,
         );
+        // Ensure availability is verified before loading the lecture
+        try {
+          let la = lectureAvailability && lectureAvailability[selectedLectureId];
+          if (!la) {
+            try {
+              const avRes = await videosAPI.getLectureAvailability(selectedLectureId);
+              if (avRes && avRes.data && avRes.data.ok) {
+                la = avRes.data;
+                setLectureAvailability((prev) => ({ ...(prev || {}), [selectedLectureId]: la }));
+              }
+            } catch (e) {
+              // ignore availability fetch errors and proceed to load videos normally
+            }
+          }
+          if (la && la.allBroken) {
+            // Show modal and do not load videos or allow playback
+            setUnavailableModal({ open: true, lecture: lectureFromChapter || { _id: selectedLectureId, title: (lectureFromChapter && lectureFromChapter.title) || 'المحاضرة' }, videos: la.perVideo ? la.perVideo.filter(p => !p.available).map(p => ({ _id: p.videoId, title: p.videoId })) : [] });
+            setVideos([]);
+            setVideosLoading(false);
+            return;
+          }
+        } catch (e) {
+          // continue to load videos if availability check fails
+        }
         if (
           lectureFromChapter &&
           Array.isArray(lectureFromChapter.videos) &&
@@ -246,6 +327,60 @@ const ChapterLecturesPage = () => {
     return <BookOpenIcon className="w-4 h-4 text-emerald-400" />;
   };
 
+  const handleRetryAvailability = async () => {
+    try {
+      if (!unavailableModal || !unavailableModal.lecture) return;
+      setUnavailableModal((s) => ({ ...(s || {}), checking: true }));
+      const lectureId = unavailableModal.lecture._id;
+      // try public availability endpoint
+      let data = null;
+      try {
+        const res = await videosAPI.getLectureAvailability(lectureId);
+        data = res && res.data;
+      } catch (e) {
+        data = null;
+      }
+      // If we couldn't get perVideo info from server, try to fetch video list
+      let vids = unavailableModal.videos || [];
+      if ((!vids || vids.length === 0) && (!data || !Array.isArray(data.perVideo))) {
+        try {
+          const vres = await videosAPI.getVideosByLecture(lectureId);
+          vids = vres.data || [];
+        } catch (e) {
+          vids = [];
+        }
+      }
+
+      // merge results into lectureAvailability state
+      if (data && data.ok) {
+        setLectureAvailability((prev) => ({ ...prev, [lectureId]: data }));
+      }
+
+      // Build updated broken list for modal (prefer authoritative perVideo)
+      let brokenList = [];
+      if (data && Array.isArray(data.perVideo)) {
+        const map = {};
+        data.perVideo.forEach((p) => { map[String(p.videoId)] = !!p.available; });
+        // try to map existing vids to IDs, otherwise create placeholders
+        if (vids && vids.length > 0) {
+          brokenList = vids.filter((v) => !map[String(v._id)]).slice(0, 10);
+        } else {
+          brokenList = data.perVideo.filter((p) => !p.available).slice(0, 10).map((p) => ({ _id: p.videoId, title: p.videoId }));
+        }
+      } else if (vids && vids.length > 0) {
+        const bad = vids.filter((v) => {
+          const quals = Array.isArray(v.qualities) ? v.qualities : [];
+          return !quals.some((q) => q && (q.lastSegmentUrl || q.url));
+        });
+        brokenList = bad.slice(0, 10);
+      }
+
+      setUnavailableModal({ open: true, lecture: unavailableModal.lecture, videos: brokenList, checking: false });
+    } catch (err) {
+      try { setUnavailableModal((s) => ({ ...(s || {}), checking: false })); } catch (e) {}
+    }
+  };
+
   // format seconds to H:MM:SS or M:SS
   const formatTime = (seconds) => {
     if (seconds == null || isNaN(seconds)) return "0:00";
@@ -307,6 +442,70 @@ const ChapterLecturesPage = () => {
     <div className="min-h-screen " dir="rtl">
       {/* شريط التنقل العلوي */}
       <UserHeader showBackButton={true} />
+
+      {/* Modal: lecture unavailable (all videos broken) */}
+      {unavailableModal.open && (
+        <div onClick={() => setUnavailableModal({ open: false, lecture: null, videos: [] })} className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 px-4 py-6">
+          <div onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="unavail-title" className="bg-white/6 border border-white/12 rounded-2xl p-4 sm:p-6 max-w-3xl w-full text-right shadow-2xl">
+            <div className="flex flex-col sm:flex-row gap-4">
+              <div className="flex-shrink-0 mt-1 flex items-start sm:items-center">
+                <div className="w-14 h-14 rounded-full bg-red-700/20 flex items-center justify-center">
+                  <XCircleIcon className="w-8 h-8 text-red-400" />
+                </div>
+              </div>
+              <div className="flex-1">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex-1">
+                    <h3 id="unavail-title" className="text-lg sm:text-xl font-bold text-white">المحاضرة غير متاحة حالياً</h3>
+                    <p className="text-white/70 mt-1 text-sm sm:text-base">نأسف للإزعاج — يبدو أن بعض أو كل فيديوهات هذه المحاضرة غير متاحة الآن. يمكنك إعادة محاولة التحقق أدناه أو المتابعة لرؤية المحتوى مع احتمال عدم تشغيل الفيديوهات.</p>
+                  </div>
+                  <div className="shrink-0">
+                    <button onClick={() => setUnavailableModal({ open: false, lecture: null, videos: [] })} className="text-white/60 hover:text-white">إغلاق</button>
+                  </div>
+                </div>
+
+                <div className="mt-4 flex flex-wrap gap-2 text-sm">
+                  <div className="px-2 py-1 bg-white/5 rounded text-white/90">معطلة: <span className="font-semibold">{(unavailableModal.videos && unavailableModal.videos.length) || (lectureAvailability && lectureAvailability[unavailableModal.lecture?._id]?.broken) || 0}</span></div>
+                  <div className="px-2 py-1 bg-white/5 rounded text-white/90">مجموع الفيديوهات: <span className="font-semibold">{(unavailableModal.videos && unavailableModal.videos.length) || (lectureAvailability && lectureAvailability[unavailableModal.lecture?._id]?.total) || '—'}</span></div>
+                </div>
+
+                {unavailableModal.videos && unavailableModal.videos.length > 0 && (
+                  <div className="mt-4 max-h-48 sm:max-h-52 overflow-auto text-sm text-white/80 space-y-2 pr-2">
+                    {unavailableModal.videos.slice(0, 10).map((v) => (
+                      <div key={v._id} className="flex justify-between items-center border-b border-white/5 pb-2">
+                        <div className="truncate">{v.title || 'فيديو (بدون عنوان)'}</div>
+                        <div className="text-xs text-white/50">{v.duration ? formatTime(v.duration) : ''}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="mt-5 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+                  <button
+                    onClick={handleRetryAvailability}
+                    disabled={!!unavailableModal.checking}
+                    className={`flex items-center justify-center gap-2 px-4 py-2 rounded w-full sm:w-auto ${unavailableModal.checking ? 'bg-white/8 text-white/60' : 'bg-white/10 text-white hover:bg-white/15'}`}
+                  >
+                    <ArrowPathIcon className={`w-5 h-5 ${unavailableModal.checking ? 'animate-spin' : ''}`} />
+                    {unavailableModal.checking ? 'جاري التحقق...' : 'إعادة التحقق'}
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      const id = unavailableModal.lecture && unavailableModal.lecture._id;
+                      setUnavailableModal({ open: false, lecture: null, videos: [] });
+                      if (id) {
+                        setSelectedLectureId(id);
+                        navigate(`/chapter/${chapterId}/lecture/${id}`);
+                      }
+                    }}
+                    className="px-4 py-2 rounded bg-cyan-600 text-white w-full sm:w-auto">متابعة لرؤية المحتوى (قد لا تعمل الفيديوهات)</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* المحتوى الرئيسي */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 p-6">
@@ -473,6 +672,7 @@ const ChapterLecturesPage = () => {
               </div>
 
               <div className="pr-2">
+
                 {!chapter?.lectures || chapter.lectures.length === 0 ? (
                   <div className="text-center py-8">
                     <BookOpenIcon className="w-12 h-12 text-white/30 mx-auto mb-3" />
@@ -487,18 +687,76 @@ const ChapterLecturesPage = () => {
                         lecture.thumbnail ||
                         chapter.thumbnailUrl ||
                         "";
+                      // compute broken videos count: prefer pre-fetched `lectureAvailability`,
+                      // otherwise fall back to embedded lecture.videos when present
+                      let brokenCount = 0;
+                      let totalCount = 0;
+                      const la = lectureAvailability && lectureAvailability[lecture._id];
+                      if (la) {
+                        brokenCount = la.broken || 0;
+                        totalCount = la.total || 0;
+                      } else if (Array.isArray(lecture.videos) && lecture.videos.length > 0) {
+                        lecture.videos.forEach((v) => {
+                          totalCount += 1;
+                          const quals = Array.isArray(v.qualities) ? v.qualities : [];
+                          const available = quals.some((q) => q && (q.lastSegmentUrl || q.url));
+                          if (!available) brokenCount += 1;
+                        });
+                      }
                       return (
                         <button
                           id={`lecture-${lecture._id}`}
                           key={lecture._id}
-                          onClick={() => {
-                            setSelectedLectureId(lecture._id);
-                            setSelectedVideo(null);
+                          onClick={async () => {
                             try {
-                              navigate(
-                                `/chapter/${chapterId}/lecture/${lecture._id}`,
-                              );
-                            } catch (e) {}
+                              // Prefer precomputed availability if present; otherwise fetch now and block navigation
+                              let la = lectureAvailability && lectureAvailability[lecture._id];
+                              if (!la) {
+                                try {
+                                  setAvailLoadingIds((s) => new Set([...s, lecture._id]));
+                                  const fres = await videosAPI.getLectureAvailability(lecture._id);
+                                  if (fres && fres.data && fres.data.ok) {
+                                    setLectureAvailability((prev) => ({ ...(prev || {}), [lecture._id]: fres.data }));
+                                    la = fres.data;
+                                  }
+                                } catch (e) {
+                                  // ignore and fallback to embedded data
+                                } finally {
+                                  setAvailLoadingIds((s) => { const n = new Set(Array.from(s).filter(x => x !== lecture._id)); return n; });
+                                }
+                              }
+                              if (la && la.allBroken) {
+                                setUnavailableModal({ open: true, lecture, videos: [] });
+                                return;
+                              }
+                              // ensure we have videos list to decide availability (fallback)
+                              let vids = lecture.videos;
+                              if (!Array.isArray(vids) || vids.length === 0) {
+                                try {
+                                  const res = await videosAPI.getVideosByLecture(lecture._id);
+                                  vids = res.data || [];
+                                } catch (fetchErr) {
+                                  console.debug('[ChapterLecturesPage] failed fetching videos for', lecture._id, fetchErr);
+                                  vids = [];
+                                }
+                              }
+                              // compute availability fallback
+                              const totals = vids.length;
+                              const bad = vids.filter((v) => {
+                                const quals = Array.isArray(v.qualities) ? v.qualities : [];
+                                return !quals.some((q) => q && (q.lastSegmentUrl || q.url));
+                              });
+                              if (totals > 0 && bad.length === totals) {
+                                // all videos broken: show modal before entering
+                                setUnavailableModal({ open: true, lecture, videos: vids });
+                                return;
+                              }
+                              setSelectedLectureId(lecture._id);
+                              setSelectedVideo(null);
+                              navigate(`/chapter/${chapterId}/lecture/${lecture._id}`);
+                            } catch (e) {
+                              console.debug('[ChapterLecturesPage] lecture click error', e);
+                            }
                             if (
                               typeof window !== "undefined" &&
                               window.innerWidth &&
@@ -520,6 +778,7 @@ const ChapterLecturesPage = () => {
                               ? "bg-gradient-to-r from-purple-500/20 to-blue-500/20 border-purple-500/30"
                               : "bg-white/5 border-white/10 hover:border-white/20"
                           }`}
+                          disabled={availLoadingIds.has(lecture._id)}
                         >
                           <div className="relative">
                             <div className="w-full h-40 bg-white/5">
@@ -538,6 +797,16 @@ const ChapterLecturesPage = () => {
                             <div className="absolute top-2 right-2 bg-black/40 text-white text-xs px-2 py-0.5 rounded-full">
                               {index + 1}
                             </div>
+                            {totalCount > 0 && brokenCount > 0 && (
+                              <div className="absolute top-2 left-2 bg-red-600 text-white text-xs px-2 py-0.5 rounded-full">
+                                {brokenCount} غير متاح
+                              </div>
+                            )}
+                            {availLoadingIds.has(lecture._id) && (
+                              <div className="absolute inset-0 flex items-center justify-center bg-black/25">
+                                <ArrowPathIcon className="w-6 h-6 text-white animate-spin" />
+                              </div>
+                            )}
                           </div>
                           <div className="p-3">
                             <div className="font-medium text-white line-clamp-2">
@@ -572,6 +841,12 @@ const ChapterLecturesPage = () => {
                   </div>
                 )}
               </div>
+              {showDebugAvail && (
+                <div className="mt-4 p-3 bg-white/5 border border-white/10 rounded text-sm text-white/70">
+                  <div className="font-medium mb-2">Debug: lectureAvailability</div>
+                  <pre className="whitespace-pre-wrap text-xs max-h-64 overflow-auto">{JSON.stringify(lectureAvailability, null, 2)}</pre>
+                </div>
+              )}
             </div>
           </div>
         </div>

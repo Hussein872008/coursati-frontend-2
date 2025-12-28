@@ -16,6 +16,7 @@ import {
   BookOpenIcon,
   PlayCircleIcon,
   DocumentTextIcon,
+  XCircleIcon,
 } from "@heroicons/react/24/outline";
 import useTitle from "../../hooks/useTitle";
 
@@ -133,7 +134,31 @@ const LectureContentPage = () => {
         setVideosLoading(true);
         const res = await videosAPI.getVideosByLecture(lectureId);
         const list = res.data || [];
-        setVideos(list);
+        // normalize availability flag for each video
+        const enhanced = (list || []).map((v) => {
+          const quals = Array.isArray(v.qualities) ? v.qualities : [];
+          const available = quals.some((q) => (q && (q.lastSegmentUrl || q.url)));
+          return { ...v, _available: !!available };
+        });
+        setVideos(enhanced);
+        // Fetch authoritative availability from server and merge per-video availability when available
+        (async () => {
+          try {
+            const avRes = await videosAPI.getLectureAvailability(lectureId);
+            const av = avRes && avRes.data;
+            if (av && Array.isArray(av.perVideo)) {
+              const map = {};
+              av.perVideo.forEach((p) => {
+                try { map[String(p.videoId)] = !!p.available; } catch (e) {}
+              });
+              setVideos((prev) =>
+                (prev || []).map((v) => ({ ...v, _available: typeof map[String(v._id)] === 'boolean' ? map[String(v._id)] : v._available }))
+              );
+            }
+          } catch (e) {
+            // ignore availability fetch errors; keep optimistic local flags
+          }
+        })();
         // load saved progress from localStorage for each video
         try {
           const map = {};
@@ -244,6 +269,15 @@ const LectureContentPage = () => {
   return (
     <div className="min-h-screen" dir="rtl">
       <UserHeader showBackButton={false} />
+      {/* Lecture-level unavailable banner: show if there are videos and none are available */}
+      {videos.length > 0 && videos.every((vv) => vv._available === false) && (
+        <div className="max-w-6xl mx-auto px-3 sm:px-6 p-3 sm:p-4">
+          <div className="rounded-lg bg-red-900/95 border border-red-800 text-white p-4 sm:p-6 mb-4 shadow-md">
+            <div className="font-bold text-lg sm:text-xl">عذراً — المحاضرة مؤقتاً غير متاحة</div>
+            <div className="text-sm sm:text-base mt-1">جميع فيديوهات هذه المحاضرة غير متاحة حالياً. نحن نعمل على حل المشكلة وسوف نعيد تشغيلها قريباً. نعتذر عن الإزعاج.</div>
+          </div>
+        </div>
+      )}
       <div className="max-w-6xl mx-auto px-4 sm:px-6 p-6">
         <div className="mb-6">
           <div className="mb-2 text-sm text-white/60">
@@ -333,11 +367,13 @@ const LectureContentPage = () => {
                     {videos.map((v, idx) => {
                       const isSelected =
                         selectedVideo && selectedVideo._id === v._id;
+                      const isAvailable = v._available !== false;
                       const prog = videoProgressMap[v._id];
                       return (
                         <div key={v._id} className="relative">
                           <button
                             onClick={() => {
+                              if (!isAvailable) return; // prevent opening unavailable videos
                               setSelectedVideo(v);
                               // mark as opened immediately and store initial progress
                               try {
@@ -382,9 +418,12 @@ const LectureContentPage = () => {
                               "w-full text-right p-3 rounded-xl border " +
                               (isSelected
                                 ? "bg-cyan-800/40 border-cyan-500"
-                                : "bg-white/5 border-white/10") +
+                                : isAvailable
+                                ? "bg-white/5 border-white/10"
+                                : "bg-gray-700/30 border-red-600/30 cursor-not-allowed") +
                               " hover:border-white/20"
                             }
+                            disabled={!isAvailable}
                           >
                             <div className="flex items-center justify-between">
                               <div className="flex items-center gap-3">
@@ -396,7 +435,11 @@ const LectureContentPage = () => {
                                       : "bg-cyan-600/20")
                                   }
                                 >
-                                  <PlayCircleIcon className="w-5 h-5 text-cyan-300" />
+                                  {isAvailable ? (
+                                    <PlayCircleIcon className="w-5 h-5 text-cyan-300" />
+                                  ) : (
+                                    <XCircleIcon className="w-5 h-5 text-red-400" />
+                                  )}
                                 </div>
                                 <div className="text-white font-medium">
                                   {idx + 1}. {v.title}
@@ -406,6 +449,11 @@ const LectureContentPage = () => {
                                 {v.duration ? formatDuration(v.duration) : ""}
                               </div>
                             </div>
+                            {!isAvailable && (
+                              <div className="mt-2 text-sm text-red-300">
+                                عذراً، هذا الفيديو غير متاح حالياً. سنعمل على إصلاحه قريباً.
+                              </div>
+                            )}
                           </button>
                           {prog && (
                             <div className="mt-2 px-1">

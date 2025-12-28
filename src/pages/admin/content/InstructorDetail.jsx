@@ -223,7 +223,7 @@ const InstructorDetail = () => {
   ];
 
   return (
-    <div className="min-h-screen p-6">
+    <div className="min-h-screen p-6 max-w-7xl mx-auto">
       {/* Background Effects */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
         <div className="absolute top-20 left-1/4 w-96 h-96 bg-blue-500/10 rounded-full blur-3xl" />

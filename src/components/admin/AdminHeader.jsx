@@ -1,7 +1,10 @@
 import React, { useRef, useEffect, useState } from "react";
+import { toast } from "react-toastify";
+import { adminAPI } from "../../utils/api";
 import { useAuth } from "../../hooks/useAuth";
 import InstallButton from "../InstallButton";
 import { Link, useLocation } from "react-router-dom";
+import NotificationBell from "../NotificationBell";
 import {
   UserCircleIcon,
   ArrowRightOnRectangleIcon,
@@ -37,9 +40,11 @@ const AdminHeader = ({ onLogout }) => {
   const { user } = useAuth();
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [scrolled, setScrolled] = useState(false);
+  const [failedCount, setFailedCount] = useState(0);
   const location = useLocation();
   const menuRef = useRef(null);
   const btnRef = useRef(null);
+  const prevFailedRef = useRef(0);
 
   const isActive = (path) => location.pathname.startsWith(path);
 
@@ -68,6 +73,8 @@ const AdminHeader = ({ onLogout }) => {
     window.addEventListener("scroll", handleScroll);
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
+
+
 
   return (
     <header
@@ -137,6 +144,7 @@ const AdminHeader = ({ onLogout }) => {
         </nav>
 
         <div className="flex items-center gap-4">
+          <NotificationBell />
           <div className="relative inline-block">
             <button
               ref={btnRef}

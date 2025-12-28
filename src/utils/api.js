@@ -26,6 +26,13 @@ const getCached = (key, fn, ttl = 30000) => {
   }
 };
 
+// Utility: clear a cached entry by key (used by UI to force refetch)
+export const clearCacheKey = (key) => {
+  try {
+    _cache.delete(key);
+  } catch (e) {}
+};
+
 // Add user code to headers if available
 api.interceptors.request.use((config) => {
   const userCode = localStorage.getItem("userCode");
@@ -291,6 +298,7 @@ export const notificationsAPI = {
     ),
     markAsRead: (id) => api.put(`/api/notifications/${id}/read`),
     markAllRead: () => api.put(`/api/notifications/read-all`),
+    deleteAll: () => api.delete(`/api/notifications/delete-all`),
 };
 
 // Admin API
@@ -302,8 +310,10 @@ export const adminAPI = {
   getLectureByIdAdmin: (id) => api.get(`/api/admin/lectures/${id}`),
   validateAllVideos: (mirror = false) => api.post('/api/admin/videos/validate-all', { mirror }),
   getValidateJob: (jobId) => api.get(`/api/admin/videos/validate-all/${jobId}`),
+  getLatestValidateJob: () => api.get(`/api/admin/videos/validate-all/latest`),
   pauseValidateJob: (jobId) => api.post(`/api/admin/videos/validate-all/${jobId}/pause`),
   resumeValidateJob: (jobId) => api.post(`/api/admin/videos/validate-all/${jobId}/resume`),
+  deleteValidateJob: (jobId) => api.delete(`/api/admin/videos/validate-all/${jobId}`),
   revalidateJobVideo: (jobId, videoId) => api.post(`/api/admin/videos/validate-all/${jobId}/revalidate/${videoId}`),
   getAllVideos: () => api.get('/api/admin/videos'),
 };
@@ -380,6 +390,9 @@ export const videosAPI = {
   viewVideo: (videoId) => api.post(`/api/videos/${videoId}/view`),
   // Delete a video (admin)
   deleteVideo: (videoId) => api.delete(`/api/videos/${videoId}`),
+  updateVideo: (videoId, body) => api.put(`/api/videos/${videoId}`, body),
+  // Public: get quick availability summary for lecture videos
+  getLectureAvailability: (lectureId) => api.get(`/api/videos/public/lecture/${lectureId}/availability`),
   signSegment: (videoId, quality, segmentNumber) =>
     api.post(`/api/videos/${videoId}/sign`, { quality, segmentNumber }),
   validateVideo: (videoId, mirror = false) =>

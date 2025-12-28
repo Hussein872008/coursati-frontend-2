@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import React, { useEffect, useState, useRef } from "react";
+import { useNavigate, Link } from "react-router-dom";
 import AdminBreadcrumb from "../../components/admin/AdminBreadcrumb";
+import { toast } from "react-toastify";
 import useTitle from "../../hooks/useTitle";
-import { adminAPI, videosAPI } from "../../utils/api";
+import { adminAPI, videosAPI, notificationsAPI } from "../../utils/api";
 // framer-motion removed for performance; use plain elements
 import {
   BookOpenIcon,
@@ -11,7 +12,10 @@ import {
   AcademicCapIcon,
   VideoCameraIcon,
   DocumentTextIcon,
+  BellIcon,
+  StopIcon,
 } from "@heroicons/react/24/solid";
+import { FiPause, FiPlay } from "react-icons/fi";
 
 const Sparkline = ({ data = [], color = "#2563eb", height = 40 }) => {
   if (!data || data.length === 0)
@@ -68,11 +72,6 @@ const AdminDashboard = () => {
   const [selectedMetric, setSelectedMetric] = useState("video");
   const [chartHover, setChartHover] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [validating, setValidating] = useState(false);
-  const [validateResult, setValidateResult] = useState(null);
-  const [jobId, setJobId] = useState(null);
-  const [job, setJob] = useState(null);
-  const [poller, setPoller] = useState(null);
   const [filter, setFilter] = useState('all'); // all | ok | failed
   const [videos, setVideos] = useState([]);
   const [videosLoading, setVideosLoading] = useState(false);
@@ -80,54 +79,134 @@ const AdminDashboard = () => {
   const perPage = 20;
   const [analysisModal, setAnalysisModal] = useState({ open: false, video: null, jobResult: null });
   const [validatingVideos, setValidatingVideos] = useState([]);
+  const [validationJob, setValidationJob] = useState(null);
+  const [validationJobLoading, setValidationJobLoading] = useState(false);
+  const [confirmModal, setConfirmModal] = useState({ open: false, title: '', message: '', onConfirm: null, loading: false });
   const navigate = useNavigate();
 
-  // cleanup poller on unmount or when poller changes
+  // Validation UI removed: validations run automatically on server-side and notifications will inform admins.
+
+  // Load latest validation job on mount
   useEffect(() => {
-    // On mount: restore any in-progress job id from localStorage and resume polling
-    const existing = localStorage.getItem('validateJobId');
-    if (existing) {
-      (async () => {
-        try {
-          setJobId(existing);
-          const first = await adminAPI.getValidateJob(existing);
-          const fj = first?.data?.job || null;
-          setJob(fj);
-          if (!fj || (fj.status !== 'finished' && fj.status !== 'failed')) {
-            const id = setInterval(async () => {
-              try {
-                const r2 = await adminAPI.getValidateJob(existing);
-                const j = r2?.data?.job || null;
-                if (j) setJob(j);
-                if (j && (j.status === 'finished' || j.status === 'failed')) {
-                  clearInterval(id);
-                  setPoller(null);
-                }
-              } catch (e) {}
-            }, 2000);
-            setPoller(id);
-            setValidating(true);
-          }
-        } catch (e) {
-          // ignore
-        }
-      })();
-    }
-    // cleanup when component unmounts handled by existing effect
+    const loadValidationJob = async () => {
+      try {
+        const res = await adminAPI.getLatestValidateJob();
+        setValidationJob(res.data?.job || null);
+      } catch (e) {
+        // ignore
+      }
+    };
+    loadValidationJob();
+    
+    // Refresh validation job every 5 seconds
+    const interval = setInterval(loadValidationJob, 5000);
+    return () => clearInterval(interval);
   }, []);
 
-  // persist jobId to localStorage
-  useEffect(() => {
-    if (jobId) localStorage.setItem('validateJobId', jobId);
-    else localStorage.removeItem('validateJobId');
-  }, [jobId]);
+  // Refresh validation job data
+  const refreshValidationJob = async () => {
+    try {
+      const res = await adminAPI.getLatestValidateJob();
+      setValidationJob(res.data?.job || null);
+      return res.data?.job || null;
+    } catch (e) {
+      console.error('refresh validation job error:', e);
+      return null;
+    }
+  };
 
-  // cleanup poller on unmount or when poller changes
-  useEffect(() => {
-    return () => {
-      if (poller) clearInterval(poller);
-    };
-  }, [poller]);
+  // Delete all notifications
+  const deleteAllNotifications = async () => {
+    setConfirmModal({
+      open: true,
+      title: 'حذف جميع الاشعارات',
+      message: 'هل أنت متأكد من حذف جميع الاشعارات؟ لا يمكن التراجع عن هذا الإجراء.',
+      onConfirm: async () => {
+        try {
+          setConfirmModal(prev => ({ ...prev, loading: true }));
+          await notificationsAPI.deleteAll();
+          setConfirmModal({ open: false, title: '', message: '', onConfirm: null, loading: false });
+          toast.success('تم حذف جميع الاشعارات بنجاح');
+        } catch (e) {
+          toast.error('حدث خطأ أثناء حذف الاشعارات');
+          setConfirmModal({ open: false, title: '', message: '', onConfirm: null, loading: false });
+        }
+      },
+      loading: false
+    });
+  };
+
+  // Pause validation job
+  const pauseValidation = async () => {
+    // Refresh the job data first
+    const currentJob = await refreshValidationJob();
+    
+    if (!currentJob?._id) {
+      toast.error('لا توجد عملية تحقق نشطة');
+      return;
+    }
+    try {
+      setValidationJobLoading(true);
+      await adminAPI.pauseValidateJob(currentJob._id);
+      const res = await refreshValidationJob();
+      setValidationJob(res);
+      toast.success('تم إيقاف التحقق مؤقتاً');
+    } catch (e) {
+      console.error('pause error:', e);
+      toast.error('حدث خطأ أثناء إيقاف التحقق: ' + (e?.response?.data?.message || e.message));
+    } finally {
+      setValidationJobLoading(false);
+    }
+  };
+
+  // Resume validation job
+  const resumeValidation = async () => {
+    // Refresh the job data first
+    const currentJob = await refreshValidationJob();
+    
+    if (!currentJob?._id) {
+      toast.error('لا توجد عملية تحقق موقوفة');
+      return;
+    }
+    try {
+      setValidationJobLoading(true);
+      await adminAPI.resumeValidateJob(currentJob._id);
+      const res = await refreshValidationJob();
+      setValidationJob(res);
+      toast.success('تم استئناف التحقق');
+    } catch (e) {
+      console.error('resume error:', e);
+      toast.error('حدث خطأ أثناء استئناف التحقق: ' + (e?.response?.data?.message || e.message));
+    } finally {
+      setValidationJobLoading(false);
+    }
+  };
+
+  // Delete validation job
+  const deleteValidationJob = async () => {
+    if (!validationJob?._id) {
+      toast.error('لا توجد عملية تحقق لحذفها');
+      return;
+    }
+    setConfirmModal({
+      open: true,
+      title: 'حذف عملية التحقق',
+      message: 'هل أنت متأكد من حذف عملية التحقق هذه؟ سيتم حذف جميع البيانات المرتبطة بها.',
+      onConfirm: async () => {
+        try {
+          setConfirmModal(prev => ({ ...prev, loading: true }));
+          await adminAPI.deleteValidateJob(validationJob._id);
+          setValidationJob(null);
+          setConfirmModal({ open: false, title: '', message: '', onConfirm: null, loading: false });
+          toast.success('تم حذف عملية التحقق بنجاح');
+        } catch (e) {
+          toast.error('حدث خطأ أثناء حذف عملية التحقق: ' + (e?.response?.data?.message || e.message));
+          setConfirmModal({ open: false, title: '', message: '', onConfirm: null, loading: false });
+        }
+      },
+      loading: false
+    });
+  };
 
   useEffect(() => {
     const load = async () => {
@@ -251,305 +330,44 @@ const AdminDashboard = () => {
       <AdminBreadcrumb
         items={[{ label: "لوحة التحكم", path: "/admin/dashboard" }]}
       />
-
-      <div className="flex items-center justify-end space-x-2">
-        <button
-          className="px-3 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-500 disabled:opacity-60"
-          onClick={async () => {
-            if (validating) return;
-            setValidating(true);
-            setValidateResult(null);
-            setJob(null);
-            setJobId(null);
-            try {
-              const res = await adminAPI.validateAllVideos(false);
-              const jid = res?.data?.jobId;
-              if (!jid) throw new Error('no job id returned');
-              setJobId(jid);
-              // try fetching status immediately, then poll
-              try {
-                const first = await adminAPI.getValidateJob(jid);
-                const fj = first?.data?.job || null;
-                setJob(fj);
-                if (fj && (fj.status === 'finished' || fj.status === 'failed')) {
-                  setValidating(false);
-                  setValidateResult(fj);
-                } else {
-                  const id = setInterval(async () => {
-                    try {
-                      const r2 = await adminAPI.getValidateJob(jid);
-                      const j = r2?.data?.job || null;
-                      if (j) setJob(j);
-                      if (j && (j.status === 'finished' || j.status === 'failed')) {
-                        clearInterval(id);
-                        setPoller(null);
-                        setValidating(false);
-                        setValidateResult(j);
-                      }
-                    } catch (e) {
-                      // ignore intermittent errors
-                    }
-                  }, 2000);
-                  setPoller(id);
-                }
-              } catch (e) {
-                // initial fetch failed — still start polling to retry
-                const id = setInterval(async () => {
-                  try {
-                    const r2 = await adminAPI.getValidateJob(jid);
-                    const j = r2?.data?.job || null;
-                    if (j) setJob(j);
-                    if (j && (j.status === 'finished' || j.status === 'failed')) {
-                      clearInterval(id);
-                      setPoller(null);
-                      setValidating(false);
-                      setValidateResult(j);
-                    }
-                  } catch (err) {
-                    // ignore
-                  }
-                }, 2000);
-                setPoller(id);
-              }
-            } catch (err) {
-              setValidateResult({ ok: false, error: err?.response?.data || err?.message || String(err) });
-              setValidating(false);
-            }
-          }}
-          disabled={validating}
-        >
-          {validating ? "جاري التحقق..." : "تحقق من كل الفيديوهات"}
-        </button>
-        {jobId && (
-          <button
-            className="px-3 py-2 bg-white/10 text-white rounded-md"
-            onClick={async () => {
-              // refresh once
-              try {
-                const r = await adminAPI.getValidateJob(jobId);
-                setJob(r?.data?.job || null);
-              } catch (e) {}
-            }}
-          >
-            تحديث الحالة
-          </button>
-        )}
-      </div>
-
-      {/* Job progress UI */}
-      {job && (
-        <div className="admin-card p-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="text-sm text-white/80">حالة التحقق: {job.status}</div>
-              <div className="text-xs text-white/70">معالجــة {job.processedVideos}/{job.totalVideos}</div>
-              {job.currentVideo && <div className="text-xs text-white/70">جارٍ الآن: {job.currentVideo.title}</div>}
+      
+      {/* Confirmation Modal */}
+      {confirmModal.open && (
+        <div className="fixed inset-0 flex items-center justify-center z-50">
+          <div 
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => !confirmModal.loading && setConfirmModal({ open: false, title: '', message: '', onConfirm: null, loading: false })}
+          />
+          <div className="bg-gradient-to-br from-gray-800 to-gray-900 rounded-2xl p-6 z-10 max-w-md w-full mx-4 shadow-2xl border border-gray-700">
+            <h3 className="text-xl font-bold text-white mb-3">{confirmModal.title}</h3>
+            <p className="text-gray-300 mb-6">{confirmModal.message}</p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => !confirmModal.loading && setConfirmModal({ open: false, title: '', message: '', onConfirm: null, loading: false })}
+                disabled={confirmModal.loading}
+                className="flex-1 px-4 py-2.5 bg-gray-700 hover:bg-gray-600 text-white rounded-lg font-medium transition-colors disabled:opacity-50"
+              >
+                إلغاء
+              </button>
+              <button
+                onClick={confirmModal.onConfirm}
+                disabled={confirmModal.loading}
+                className="flex-1 px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-lg font-medium transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {confirmModal.loading ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    جاري...
+                  </>
+                ) : (
+                  'تأكيد'
+                )}
+              </button>
             </div>
-            <div className="w-1/3">
-              <div className="bg-white/10 h-2 rounded overflow-hidden">
-                <div
-                  className="h-2 bg-indigo-500"
-                  style={{ width: `${job.totalVideos ? Math.round((job.processedVideos / job.totalVideos) * 100) : 0}%` }}
-                />
-              </div>
-            </div>
-            <div className="ml-4 flex items-center gap-2">
-              {job && job.paused ? (
-                <button className="px-3 py-1 bg-emerald-600 text-white rounded" onClick={async ()=>{ try{ await adminAPI.resumeValidateJob(job.id); const r=await adminAPI.getValidateJob(job.id); setJob(r.data.job); }catch(e){} }}>استئناف</button>
-              ) : (
-                <button className="px-3 py-1 bg-yellow-600 text-white rounded" onClick={async ()=>{ try{ await adminAPI.pauseValidateJob(job.id); const r=await adminAPI.getValidateJob(job.id); setJob(r.data.job); }catch(e){} }}>إيقاف مؤقت</button>
-              )}
-              <select value={filter} onChange={(e)=>setFilter(e.target.value)} className="px-2 py-1 bg-white/5 text-white rounded">
-                <option value="all">الكل</option>
-                <option value="ok">الناجحة فقط</option>
-                <option value="failed">الفاشلة فقط</option>
-              </select>
-            </div>
-          </div>
-          <div className="mt-3 text-xs text-white/70">
-            <div>مقاطع مكتملة: {job.videos.length}</div>
-            <ul className="list-disc list-inside max-h-48 overflow-auto mt-2">
-              {job.videos.slice().reverse().filter((vv)=>{
-                if (filter==='all') return true;
-                if (filter==='ok') return !!vv.ok;
-                return !vv.ok;
-              }).slice(0, 50).map((v) => (
-                <li key={String(v.videoId)} className="mb-1 flex items-center gap-3">
-                  <span className="font-medium">{v.title}</span>
-                  <span>{v.ok ? <span className="text-green-400">OK</span> : <span className="text-red-400">فشل</span>}</span>
-                  {v.lectureId && (
-                    <a
-                      href={`/admin/content/lecture/${v.lectureId}?highlight=${v.videoId}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-xs text-white/70 underline"
-                    >اذهب للفيديو</a>
-                  )}
-                  {!v.ok && (
-                    <button className="text-xs px-2 py-1 bg-white/10 rounded" onClick={async ()=>{
-                      try{
-                        await adminAPI.revalidateJobVideo(job.id, v.videoId);
-                        const r=await adminAPI.getValidateJob(job.id);
-                        setJob(r.data.job);
-                      }catch(e){ }
-                    }}>اعادة تحقق</button>
-                  )}
-                </li>
-              ))}
-            </ul>
           </div>
         </div>
       )}
-
-      {/* Videos list with improved layout */}
-      <div className="admin-card p-4">
-        <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-semibold">قائمة الفيديوهات</h3>
-          <div className="flex items-center gap-2">
-            <button
-              className="px-3 py-2 bg-indigo-600 text-white rounded-md"
-              onClick={async () => {
-                setVideosLoading(true);
-                try {
-                  const r = await adminAPI.getAllVideos();
-                  setVideos((r.data && r.data.videos) || []);
-                  setPage(1);
-                } catch (e) {
-                } finally {
-                  setVideosLoading(false);
-                }
-              }}
-            >
-              تحميل الفيديوهات
-            </button>
-            <select value={filter} onChange={(e)=>setFilter(e.target.value)} className="px-2 py-1 bg-white/5 text-white rounded">
-              <option value="all">الكل</option>
-              <option value="ok">الناجحة فقط</option>
-              <option value="failed">الفاشلة فقط</option>
-            </select>
-          </div>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead>
-              <tr className="text-left text-white/80">
-                <th className="px-3 py-2">العنوان</th>
-                <th className="px-3 py-2">الفصل</th>
-                <th className="px-3 py-2">تاريخ الإنشاء</th>
-                <th className="px-3 py-2">الحالة</th>
-                <th className="px-3 py-2">إجراءات</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(() => {
-                // build a map from job results for quick lookup
-                const jobMap = {};
-                if (job && job.videos && Array.isArray(job.videos)) {
-                  for (const v of job.videos) jobMap[String(v.videoId)] = v;
-                }
-                const filtered = videos.filter((v) => {
-                  if (!filter || filter === 'all') return true;
-                  const jr = jobMap[String(v._id)] || v._lastValidation;
-                  if (filter === 'ok') return jr && jr.ok;
-                  if (filter === 'failed') return jr && !jr.ok;
-                  return true;
-                });
-                const start = (page - 1) * perPage;
-                const pageItems = filtered.slice(start, start + perPage);
-                if (pageItems.length === 0) return (
-                  <tr><td colSpan={5} className="px-3 py-4 text-white/60">لا توجد فيديوهات للعرض</td></tr>
-                );
-                return pageItems.map((v) => {
-                  const jr = jobMap[String(v._id)] || v._lastValidation;
-                  return (
-                    <tr key={String(v._id)} className="border-t border-white/5">
-                      <td className="px-3 py-2 align-top">
-                        <div className="font-medium text-white">{v.title}</div>
-                        <div className="text-xs text-white/60">{v._id}</div>
-                      </td>
-                      <td className="px-3 py-2 align-top text-white/70">{v.lectureId || '-'}</td>
-                      <td className="px-3 py-2 align-top text-white/70">{new Date(v.createdAt).toLocaleString()}</td>
-                      <td className="px-3 py-2 align-top">
-                        {jr ? (
-                          jr.ok ? <span className="px-2 py-1 bg-green-600 text-white rounded text-xs">ناجح</span> : <span className="px-2 py-1 bg-red-600 text-white rounded text-xs">فشل</span>
-                        ) : (
-                          <span className="px-2 py-1 bg-white/10 text-white rounded text-xs">غير مختبر</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-2 align-top">
-                        <div className="flex items-center gap-2">
-                          <button
-                            className="px-2 py-1 bg-white/10 rounded text-xs"
-                            disabled={validatingVideos.includes(String(v._id))}
-                            onClick={async ()=>{
-                              // prevent duplicate clicks
-                              if (validatingVideos.includes(String(v._id))) return;
-                              setValidatingVideos((s)=>[...s, String(v._id)]);
-                              const removeValidating = ()=>setValidatingVideos((s)=>s.filter(x=>x!==String(v._id)));
-                              try{
-                                if (job && job.id) {
-                                  // append result to current job and refresh job
-                                  const r = await adminAPI.revalidateJobVideo(job.id, v._id);
-                                  const rec = r?.data?.rec;
-                                  try{
-                                    const jr = await adminAPI.getValidateJob(job.id);
-                                    setJob(jr.data.job);
-                                  }catch(e){}
-                                  // update row in-place
-                                  setVideos((prev)=>prev.map((x)=> x._id===v._id ? { ...x, _lastValidation: rec } : x));
-                                } else {
-                                  // standalone validation
-                                  const r = await videosAPI.validateVideo(v._id, false);
-                                  const results = r?.data?.results;
-                                  const computeOk = (res)=>{
-                                    try{
-                                      const quals = Object.values(res||{});
-                                      for (const arr of quals) {
-                                        for (const it of arr) {
-                                          if (it && it.ok === false) return false;
-                                        }
-                                      }
-                                      return true;
-                                    }catch(e){return false}
-                                  };
-                                  const ok = computeOk(results);
-                                  const rec = { videoId: v._id, lectureId: v.lectureId, title: v.title, ok, results, processedAt: new Date() };
-                                  setVideos((prev)=>prev.map((x)=> x._id===v._id ? { ...x, _lastValidation: rec } : x));
-                                }
-                              }catch(e){}
-                              finally{ removeValidating(); }
-                            }}
-                          >
-                            {validatingVideos.includes(String(v._id)) ? 'جاري...' : 'تحقق'}
-                          </button>
-                          {v.lectureId && (
-                            <a className="text-xs text-white/70 underline" href={`/admin/content/lecture/${v.lectureId}?highlight=${v._id}`} target="_blank" rel="noopener noreferrer">اذهب</a>
-                          )}
-                          <button className="text-xs px-2 py-1 bg-white/10 rounded" onClick={()=>{
-                            const jr = jobMap[String(v._id)] || v._lastValidation;
-                            setAnalysisModal({ open: true, video: v, jobResult: jr || null });
-                          }}>تحليل</button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                });
-              })()}
-            </tbody>
-          </table>
-        </div>
-
-        <div className="flex items-center justify-between mt-3">
-          <div className="text-xs text-white/70">عرض {Math.min(videos.length, (page)*perPage)} من {videos.length}</div>
-          <div className="flex items-center gap-2">
-            <button className="px-2 py-1 bg-white/5 rounded" disabled={page<=1} onClick={()=>setPage((p)=>Math.max(1,p-1))}>السابق</button>
-            <div className="text-xs text-white/80">صفحة {page}</div>
-            <button className="px-2 py-1 bg-white/5 rounded" disabled={(page*perPage)>=videos.length} onClick={()=>setPage((p)=>p+1)}>التالي</button>
-          </div>
-        </div>
-      </div>
-
+      
       {/* Analysis modal */}
       {analysisModal.open && (
         <div className="fixed inset-0 flex items-center justify-center z-50">
@@ -631,6 +449,104 @@ const AdminDashboard = () => {
             ) : null
           }
         />
+        {/* Lectures Health quick card */}
+        <Link to="/admin/content/lectures-health" className="block">
+          <div className="p-4 rounded-xl admin-card hover:shadow-lg transition-all duration-200">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm text-white/80">صحة المحاضرات</div>
+                <div className="text-2xl font-bold text-white mt-2">تفقد المحتوى</div>
+              </div>
+              <div className={`bg-amber-500 w-10 h-10 rounded-lg flex items-center justify-center shadow-sm ring-1 ring-white/10`}>
+                <svg className="w-5 h-5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v4a1 1 0 001 1h3m10 0h3a1 1 0 001-1V7M16 3l-4 4-4-4M8 21h8"/></svg>
+              </div>
+            </div>
+            <div className="text-xs text-white/70 mt-3">عرض المحاضرات المرتبة حسب نسبة الفيديوهات المعطلة</div>
+          </div>
+        </Link>
+        
+        {/* Clear Notifications Card */}
+        <button onClick={deleteAllNotifications} className="block w-full text-left">
+          <div className="p-4 rounded-xl admin-card hover:shadow-lg transition-all duration-200 hover:from-red-900/30 hover:to-red-800/30">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm text-white/80">الاشعارات</div>
+                <div className="text-2xl font-bold text-white mt-2">حذف الكل</div>
+              </div>
+              <div className={`bg-red-600 w-10 h-10 rounded-lg flex items-center justify-center shadow-sm ring-1 ring-white/10`}>
+                <BellIcon className="w-5 h-5 text-white" />
+              </div>
+            </div>
+            <div className="text-xs text-white/70 mt-3">حذف جميع الاشعارات المتراكمة</div>
+          </div>
+        </button>
+        
+        {/* Validation Job Control Card */}
+        <button 
+          onClick={validationJob?.paused ? resumeValidation : pauseValidation}
+          disabled={validationJobLoading}
+          className="block w-full text-left disabled:opacity-50"
+        >
+          <div className={`p-4 rounded-xl admin-card hover:shadow-lg transition-all duration-200 ${
+            validationJob?.paused 
+              ? 'hover:from-yellow-900/30 hover:to-yellow-800/30' 
+              : 'hover:from-purple-900/30 hover:to-purple-800/30'
+          }`}>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm text-white/80">التحقق التلقائي</div>
+                <div className="text-2xl font-bold text-white mt-2">
+                  {validationJobLoading ? '...' : validationJob?.paused ? 'استئناف' : 'إيقاف'}
+                </div>
+              </div>
+              <div className={`${
+                validationJob?.paused 
+                  ? 'bg-yellow-600' 
+                  : 'bg-purple-600'
+              } w-10 h-10 rounded-lg flex items-center justify-center shadow-sm ring-1 ring-white/10`}>
+                {validationJob?.paused ? (
+                  <FiPlay className="w-5 h-5 text-white" />
+                ) : (
+                  <FiPause className="w-5 h-5 text-white" />
+                )}
+              </div>
+            </div>
+            <div className="text-xs text-white/70 mt-3">
+              {validationJob ? (
+                <>
+                  <div>الحالة: {validationJob.paused ? 'موقوف مؤقتاً' : 'جاري التحقق'}</div>
+                  <div>التقدم: {validationJob.processed || 0}/{validationJob.totalVideos || 0}</div>
+                </>
+              ) : (
+                'لا توجد عملية تحقق نشطة'
+              )}
+            </div>
+          </div>
+        </button>
+
+        {/* Delete Validation Job Card */}
+        {validationJob && (
+          <button 
+            onClick={deleteValidationJob}
+            disabled={validationJobLoading}
+            className="block w-full text-left disabled:opacity-50"
+          >
+            <div className="p-4 rounded-xl admin-card hover:shadow-lg transition-all duration-200 hover:from-orange-900/30 hover:to-red-900/30">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-sm text-white/80">حذف التحقق</div>
+                  <div className="text-2xl font-bold text-white mt-2">مسح البيانات</div>
+                </div>
+                <div className="bg-orange-600 w-10 h-10 rounded-lg flex items-center justify-center shadow-sm ring-1 ring-white/10">
+                  <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                </div>
+              </div>
+              <div className="text-xs text-white/70 mt-3">حذف عملية التحقق القديمة وجميع بيانات النتائج</div>
+            </div>
+          </button>
+        )}
       </div>
 
       <div className="admin-card p-6">

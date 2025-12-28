@@ -25,6 +25,8 @@ function VideoPlayer({ video }) {
   const [bufferedPercent, setBufferedPercent] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [showErrorOverlay, setShowErrorOverlay] = useState(false);
+  const errorTimerRef = useRef(null);
   const [qualityMenuOpen, setQualityMenuOpen] = useState(false);
   const [speedMenuOpen, setSpeedMenuOpen] = useState(false);
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
@@ -590,6 +592,7 @@ function VideoPlayer({ video }) {
     let saveInt = null;
     let rafId = null;
     let updateTime = null;
+    let onPlaying = null;
 
     const initPlayer = async () => {
       try {
@@ -651,12 +654,24 @@ function VideoPlayer({ video }) {
           hlsRef.current = hls;
 
           hls.on(HlsModule.Events.MANIFEST_PARSED, () => {
+            // clear any previous transient error and mark ready
+            setError(null);
             setLoading(false);
             // Apply saved/default quality once manifest (levels) are available
             try {
               if (defaultQuality) applyQualityToHls(hls, defaultQuality);
             } catch (e) {}
             safePlay();
+            try {
+              if (videoRef.current) {
+                onPlaying = () => {
+                  setError(null);
+                  setLoading(false);
+                  setIsPlaying(true);
+                };
+                videoRef.current.addEventListener('playing', onPlaying);
+              }
+            } catch (e) {}
           });
 
           hls.on(HlsModule.Events.ERROR, (event, data) => {
@@ -687,11 +702,21 @@ function VideoPlayer({ video }) {
           if (canNativeHls) {
             v.src = playlistUrl;
             v.addEventListener("loadedmetadata", () => {
+              // clear transient errors when metadata arrives
+              setError(null);
               setLoading(false);
               const serverDuration = (video && Number(video.duration)) || 0;
               if (serverDuration > 0) setDuration(serverDuration);
               else setDuration(v.duration || 0);
             });
+            try {
+              onPlaying = () => {
+                setError(null);
+                setLoading(false);
+                setIsPlaying(true);
+              };
+              v.addEventListener('playing', onPlaying);
+            } catch (e) {}
             v.addEventListener("error", () => {
               setError("فشل التشغيل");
               setLoading(false);
@@ -795,6 +820,9 @@ function VideoPlayer({ video }) {
         try {
           videoRef.current.load();
         } catch (e) {}
+        try {
+          if (onPlaying && videoRef.current) videoRef.current.removeEventListener('playing', onPlaying);
+        } catch (e) {}
       }
       if (saveInt) clearInterval(saveInt);
       if (rafId) cancelAnimationFrame(rafId);
@@ -812,6 +840,28 @@ function VideoPlayer({ video }) {
     }
     return () => clearHideControls();
   }, [showControls, qualityMenuOpen, speedMenuOpen, settingsMenuOpen, scheduleHideControls, clearHideControls]);
+
+  // Delay showing error overlay to avoid brief transient flashes on click
+  useEffect(() => {
+    if (error) {
+      // reset overlay visibility then show after short delay
+      setShowErrorOverlay(false);
+      if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
+      errorTimerRef.current = setTimeout(() => setShowErrorOverlay(true), 350);
+    } else {
+      if (errorTimerRef.current) {
+        clearTimeout(errorTimerRef.current);
+        errorTimerRef.current = null;
+      }
+      setShowErrorOverlay(false);
+    }
+    return () => {
+      if (errorTimerRef.current) {
+        clearTimeout(errorTimerRef.current);
+        errorTimerRef.current = null;
+      }
+    };
+  }, [error]);
 
   // compute an estimated bottom inset for fullscreen on mobile
   useEffect(() => {
@@ -1334,7 +1384,7 @@ function VideoPlayer({ video }) {
         )}
 
         {/* رسالة الخطأ */}
-        {error && (
+        {error && showErrorOverlay && (
           <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-black/90 to-gray-900/90 backdrop-blur-md">
             <div className="text-center p-8 bg-gradient-to-br from-gray-900 to-black rounded-2xl max-w-sm border border-white/10 shadow-2xl">
               <div className="text-red-400 text-xl mb-4 font-semibold flex items-center justify-center gap-2">

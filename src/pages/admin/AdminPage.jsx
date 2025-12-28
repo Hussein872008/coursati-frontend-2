@@ -8,6 +8,7 @@ import {
   lecturesAPI,
   pdfsAPI,
 } from "../../utils/api";
+import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "../../hooks/useAuth";
 import useTitle from "../../hooks/useTitle";
 import FileUploadWidget from "../../components/FileUploadWidget";
@@ -24,6 +25,7 @@ const AdminPage = () => {
   const [selectedChapter, setSelectedChapter] = useState(null);
   const [selectedLecture, setSelectedLecture] = useState(null);
   const [loading, setLoading] = useState(false);
+  const queryClient = useQueryClient();
 
   // Form states
   const [newUserName, setNewUserName] = useState("");
@@ -38,6 +40,13 @@ const AdminPage = () => {
   // Video states removed - video functionality has been removed from the project
   const [newPdfTitle, setNewPdfTitle] = useState("");
   const [newPdfUrl, setNewPdfUrl] = useState("");
+  // Creating states for form submit buttons
+  const [creatingUser, setCreatingUser] = useState(false);
+  const [creatingMaterial, setCreatingMaterial] = useState(false);
+  const [creatingInstructor, setCreatingInstructor] = useState(false);
+  const [creatingChapter, setCreatingChapter] = useState(false);
+  const [creatingLecture, setCreatingLecture] = useState(false);
+  const [creatingPdf, setCreatingPdf] = useState(false);
 
   useEffect(() => {
     loadUsers();
@@ -120,19 +129,23 @@ const AdminPage = () => {
 
   const createUser = async (e) => {
     e.preventDefault();
+    setCreatingUser(true);
     try {
       await authAPI.createUser(newUserName, newUserPhone);
       setNewUserName("");
       setNewUserPhone("");
       alert("تم إنشاء المستخدم بنجاح");
-      loadUsers();
+      await loadUsers();
     } catch (error) {
       alert("خطأ في إنشاء المستخدم");
+    } finally {
+      setCreatingUser(false);
     }
   };
 
   const createMaterial = async (e) => {
     e.preventDefault();
+    setCreatingMaterial(true);
     try {
       await materialAPI.createMaterial(
         newMaterialTitle,
@@ -142,9 +155,16 @@ const AdminPage = () => {
       setNewMaterialTitle("");
       setNewMaterialThumbnail("");
       alert("تم إنشاء المادة بنجاح");
-      loadMaterials();
+      await loadMaterials();
+      try {
+        await queryClient.invalidateQueries(["materials"]);
+      } catch (e) {
+        // ignore
+      }
     } catch (error) {
       alert("خطأ في إنشاء المادة");
+    } finally {
+      setCreatingMaterial(false);
     }
   };
 
@@ -154,6 +174,7 @@ const AdminPage = () => {
       alert("اختر مادة أولاً");
       return;
     }
+    setCreatingInstructor(true);
     try {
       await instructorAPI.createInstructor(
         newInstructorTitle,
@@ -173,6 +194,8 @@ const AdminPage = () => {
       });
     } catch (error) {
       alert("خطأ في إنشاء المدرس");
+    } finally {
+      setCreatingInstructor(false);
     }
   };
 
@@ -182,6 +205,7 @@ const AdminPage = () => {
       alert("اختر مدرساً أولاً");
       return;
     }
+    setCreatingChapter(true);
     try {
       await chapterAPI.createChapter(
         newChapterTitle,
@@ -210,6 +234,8 @@ const AdminPage = () => {
       setMaterials(updatedMaterials);
     } catch (error) {
       alert("خطأ في إنشاء الفصل");
+    } finally {
+      setCreatingChapter(false);
     }
   };
 
@@ -219,6 +245,7 @@ const AdminPage = () => {
       alert("اختر فصلاً أولاً");
       return;
     }
+    setCreatingLecture(true);
     try {
       await lecturesAPI.createLecture(
         newLectureTitle,
@@ -254,6 +281,8 @@ const AdminPage = () => {
       setMaterials(updatedMaterials);
     } catch (error) {
       alert("خطأ في إنشاء المحاضرة");
+    } finally {
+      setCreatingLecture(false);
     }
   };
 
@@ -265,14 +294,17 @@ const AdminPage = () => {
       alert("اختر محاضرة أولاً");
       return;
     }
+    setCreatingPdf(true);
     try {
       await pdfsAPI.createPDF(newPdfTitle, selectedLecture._id, newPdfUrl, 0);
       setNewPdfTitle("");
       setNewPdfUrl("");
       alert("تم إضافة الملف بنجاح");
-      loadMaterials();
+      await loadMaterials();
     } catch (error) {
       alert("خطأ في إضافة الملف");
+    } finally {
+      setCreatingPdf(false);
     }
   };
 
@@ -341,9 +373,10 @@ const AdminPage = () => {
                 />
                 <button
                   type="submit"
-                  className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded"
+                  className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded disabled:opacity-60"
+                  disabled={creatingUser}
                 >
-                  إنشاء مستخدم
+                  {creatingUser ? "جارٍ الإنشاء..." : "إنشاء مستخدم"}
                 </button>
               </form>
             </div>
@@ -412,9 +445,10 @@ const AdminPage = () => {
 
                 <button
                   type="submit"
-                  className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded"
+                  className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded disabled:opacity-60"
+                  disabled={creatingMaterial}
                 >
-                  إنشاء مادة
+                  {creatingMaterial ? "جارٍ الإنشاء..." : "إنشاء مادة"}
                 </button>
               </form>
             </div>
@@ -491,10 +525,10 @@ const AdminPage = () => {
 
                 <button
                   type="submit"
-                  className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded disabled:bg-gray-400"
-                  disabled={!selectedMaterial}
+                  className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded disabled:opacity-60"
+                  disabled={!selectedMaterial || creatingInstructor}
                 >
-                  إنشاء مدرس
+                  {creatingInstructor ? "جارٍ الإنشاء..." : "إنشاء مدرس"}
                 </button>
               </form>
             </div>
@@ -548,10 +582,10 @@ const AdminPage = () => {
 
                   <button
                     type="submit"
-                    className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded disabled:bg-gray-400"
-                    disabled={!selectedInstructor}
+                    className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded disabled:opacity-60"
+                    disabled={!selectedInstructor || creatingChapter}
                   >
-                    إنشاء فصل
+                    {creatingChapter ? "جارٍ الإنشاء..." : "إنشاء فصل"}
                   </button>
                 </form>
 
@@ -596,9 +630,10 @@ const AdminPage = () => {
                   />
                   <button
                     type="submit"
-                    className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded"
+                    className="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded disabled:opacity-60"
+                    disabled={creatingLecture}
                   >
-                    إنشاء محاضرة
+                    {creatingLecture ? "جارٍ الإنشاء..." : "إنشاء محاضرة"}
                   </button>
                 </form>
               </div>
@@ -658,9 +693,10 @@ const AdminPage = () => {
                   />
                   <button
                     type="submit"
-                    className="bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-4 rounded"
+                    className="bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-4 rounded disabled:opacity-60"
+                    disabled={!selectedLecture || creatingPdf}
                   >
-                    إضافة ملف PDF
+                    {creatingPdf ? "جارٍ الإضافة..." : "إضافة ملف PDF"}
                   </button>
                 </form>
               </div>

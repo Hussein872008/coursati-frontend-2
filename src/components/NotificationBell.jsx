@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef } from "react";
 import { BellIcon } from "@heroicons/react/24/outline";
 import { notificationsAPI } from "../utils/api";
 import { useNavigate } from "react-router-dom";
+import { useAuth } from "../hooks/useAuth";
 
 const DEFAULT_ICON = (
   <div className="w-12 h-8 bg-gray-700/70 rounded-md flex items-center justify-center text-white">
@@ -15,6 +16,7 @@ const NotificationBell = () => {
   const [toast, setToast] = useState(null);
   const latestRef = useRef(null);
   const navigate = useNavigate();
+  const { user } = useAuth();
 
   const fetch = async () => {
     try {
@@ -57,13 +59,23 @@ const NotificationBell = () => {
   const goToLecture = (n) => {
     try {
       setOpen(false);
+      // If this notification is admin-only and the current user is an admin,
+      // navigate to the admin lecture redirect which will open the admin lecture
+      // detail and support the `highlight` query param to highlight a video card.
+      if (n && n.adminOnly && user && user.isAdmin && n.lectureId) {
+        setOpen(false);
+        const url = `/admin/content/lecture/${n.lectureId}${n.videoId ? '?highlight='+encodeURIComponent(n.videoId) : ''}`;
+        navigate(url);
+        return;
+      }
+
       if (n && n.chapterId) {
         const qp = new URLSearchParams();
         if (n.lectureId) qp.set("lecture", n.lectureId);
         if (n.videoId) qp.set("video", n.videoId);
         const qs = qp.toString();
         const hash = n.lectureId ? `#lecture-${n.lectureId}` : "";
-        const url = `/chapter/${n.chapterId}${qs ? `?${qs}` : ""}${hash}`;
+          const url = `/chapter/${n.chapterId}${qs ? `?${qs}` : ""}${hash}`;
         navigate(url);
       }
     } catch (e) {}
@@ -115,13 +127,19 @@ const NotificationBell = () => {
           try {
             handleMarkRead(n._id);
           } catch (e) {}
-          const qp = new URLSearchParams();
-          if (n.lectureId) qp.set("lecture", n.lectureId);
-          if (n.videoId) qp.set("video", n.videoId);
-          const qs = qp.toString();
-          const hash = n.lectureId ? `#lecture-${n.lectureId}` : "";
-          const url = `/chapter/${n.chapterId}${qs ? `?${qs}` : ""}${hash}`;
-          navigate(url);
+          // prefer admin redirect for admin-only notifications
+          if (n.adminOnly && user && user.isAdmin && n.lectureId) {
+            const url = `/admin/content/lecture/${n.lectureId}${n.videoId ? '?highlight='+encodeURIComponent(n.videoId) : ''}`;
+            navigate(url);
+          } else {
+            const qp = new URLSearchParams();
+            if (n.lectureId) qp.set("lecture", n.lectureId);
+            if (n.videoId) qp.set("video", n.videoId);
+            const qs = qp.toString();
+            const hash = n.lectureId ? `#lecture-${n.lectureId}` : "";
+            const url = `/chapter/${n.chapterId}${qs ? `?${qs}` : ""}${hash}`;
+            navigate(url);
+          }
         } catch (e) {}
         try {
           notif.close();
@@ -216,8 +234,11 @@ const NotificationBell = () => {
                   )}
                 </div>
                 <div className="flex-1">
-                  <div className="text-sm text-white font-medium">
-                    {n.title}
+                  <div className="flex items-center justify-between">
+                    <div className="text-sm text-white font-medium">{n.title}</div>
+                    {n.adminOnly && (
+                      <div className="text-xs bg-red-600 text-white px-2 py-0.5 rounded">ادمن</div>
+                    )}
                   </div>
                   <div className="text-xs text-white/60">
                     {n.chapterTitle || n.instructorTitle || n.materialTitle
@@ -271,11 +292,12 @@ const NotificationBell = () => {
               DEFAULT_ICON
             )}
           </div>
-          <div>
-            <div className="font-medium">{toast.title}</div>
-            <div className="text-sm text-white/60">
-              {new Date(toast.createdAt).toLocaleString()}
+          <div style={{ minWidth: 160 }}>
+            <div className="flex items-center justify-between">
+              <div className="font-medium">{toast.title}</div>
+              {toast.adminOnly && <div className="text-xs bg-red-600 text-white px-2 py-0.5 rounded">ادمن</div>}
             </div>
+            <div className="text-sm text-white/60">{new Date(toast.createdAt).toLocaleString()}</div>
           </div>
         </div>
       )}
