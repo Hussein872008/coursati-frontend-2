@@ -351,7 +351,7 @@ const LectureContentPage = () => {
       )}
         <div className="bg-gradient-to-br from-gray-800/40 to-gray-900/40 backdrop-blur-xl border border-white/10 rounded-2xl p-6">
           <div className="space-y-6">
-            <div className="md:grid md:grid-cols-2 md:gap-6 space-y-6 md:space-y-0">
+            <div className={`md:grid ${ (pdfsLoading || (pdfs && pdfs.length > 0)) ? 'md:grid-cols-2' : 'md:grid-cols-1'} md:gap-6 space-y-6 md:space-y-0`}>
               <div>
                 <h3 className="text-lg font-semibold text-white mb-3">
                   فيديوهات المحاضرة

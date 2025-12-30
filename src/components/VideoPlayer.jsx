@@ -4,6 +4,7 @@ import React, {
   useState,
   useCallback,
 } from "react";
+import { createPortal } from 'react-dom';
 import PropTypes from 'prop-types';
 import api from "../utils/api";
 import { useAuth } from "../hooks/useAuth";
@@ -28,12 +29,14 @@ function VideoPlayer({ video = null }) {
   const qualityRef = useRef(null);
   const speedRef = useRef(null);
   const settingsRef = useRef(null);
+  const settingsMenuRef = useRef(null);
   const hlsRef = useRef(null);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [showControls, setShowControls] = useState(true);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [showRemaining, setShowRemaining] = useState(false);
   const [bufferedPercent, setBufferedPercent] = useState(0);
   const pointerLongSuppressClickRef = useRef(false);
   const ignoreToggleRef = useRef(false);
@@ -51,6 +54,9 @@ function VideoPlayer({ video = null }) {
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [fullscreenBottomInset, setFullscreenBottomInset] = useState(0);
+  const fullscreenTransitionRef = useRef(false);
+  const prevHlsLevelRef = useRef(null);
+  const hlsFreezeTimeoutRef = useRef(null);
   const [currentQuality, setCurrentQuality] = useState(null);
   const [shouldInit, setShouldInit] = useState(true);
 
@@ -102,6 +108,21 @@ function VideoPlayer({ video = null }) {
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(null);
   const [hoverProgress, setHoverProgress] = useState(false);
+  const [hoverTime, setHoverTime] = useState(null);
+  const [hoverPosPct, setHoverPosPct] = useState(0);
+
+  const handleProgressMouseMove = useCallback((e) => {
+    try {
+      if (!progressRef.current || !duration || isTouchInput.current) return;
+      const rect = progressRef.current.getBoundingClientRect();
+      const clientX = (e && e.clientX) || (e.touches && e.touches[0] && e.touches[0].clientX) || 0;
+      const x = clientX - rect.left;
+      const pct = Math.max(0, Math.min(1, rect.width > 0 ? x / rect.width : 0));
+      const seconds = Math.round(pct * duration);
+      setHoverPosPct(pct * 100);
+      setHoverTime(formatTime(seconds));
+    } catch (err) {}
+  }, [duration]);
 
   const hideControlsTimeoutRef = useRef(null);
   const prevVolumeRef = useRef(volume);
@@ -468,27 +489,29 @@ function VideoPlayer({ video = null }) {
   const toggleFullscreen = useCallback(() => {
     try {
       if (!videoRef.current) return;
-      const container = (containerRef.current && containerRef.current.parentElement) || videoRef.current.parentElement;
+      // request fullscreen on the player container itself to avoid touching
+      // parent elements (which can cause layout changes or remounts in some browsers)
+      const container = containerRef.current || videoRef.current.parentElement;
       if (!container) return;
-
+      // Do NOT set `isFullscreen` here — let the `fullscreenchange` event
+      // update state. For entering/exiting we simply invoke the browser API.
       if (!document.fullscreenElement) {
-        if (container.requestFullscreen) {
-          container.requestFullscreen();
-        } else if (container.webkitRequestFullscreen) {
-          container.webkitRequestFullscreen();
-        } else if (container.msRequestFullscreen) {
-          container.msRequestFullscreen();
+        // Request fullscreen on the player container so overlays/controls
+        // that are siblings of the <video> element are also shown in FS.
+        if (container.requestFullscreen) container.requestFullscreen();
+        else if (container.webkitRequestFullscreen) container.webkitRequestFullscreen();
+        else if (container.msRequestFullscreen) container.msRequestFullscreen();
+        else {
+          // fallback to video element if container FS isn't available
+          const v = videoRef.current;
+          if (v && v.requestFullscreen) v.requestFullscreen();
+          else if (v && v.webkitRequestFullscreen) v.webkitRequestFullscreen();
+          else if (v && v.msRequestFullscreen) v.msRequestFullscreen();
         }
-        setIsFullscreen(true);
       } else {
-        if (document.exitFullscreen) {
-          document.exitFullscreen();
-        } else if (document.webkitExitFullscreen) {
-          document.webkitExitFullscreen();
-        } else if (document.msExitFullscreen) {
-          document.msExitFullscreen();
-        }
-        setIsFullscreen(false);
+        if (document.exitFullscreen) document.exitFullscreen();
+        else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+        else if (document.msExitFullscreen) document.msExitFullscreen();
       }
     } catch (e) {
       console.warn("Fullscreen toggle error:", e);
@@ -704,6 +727,10 @@ function VideoPlayer({ video = null }) {
           try { hlsRef.current.autoLevelEnabled = false; } catch (e) {}
           try { hlsRef.current.loadSource(playlistUrl); } catch (e) {}
           try { hlsRef.current.attachMedia(videoRef.current); } catch (e) {}
+              // attempt to resume playback after switching source
+              setTimeout(() => {
+                try { safePlay(); } catch (e) {}
+              }, 250);
           // also attempt explicit level selection as a fallback
           try { applyQualityToHls(hlsRef.current, q); } catch (e) {}
         } catch (e) {}
@@ -1539,13 +1566,79 @@ function VideoPlayer({ video = null }) {
     // استجابة لتغيير وضع ملء الشاشة
     const handleFullscreenChange = () => {
       const isFs = !!document.fullscreenElement;
+
+      // mark that we're in a transition to suppress transient 'waiting' events
+      try {
+        fullscreenTransitionRef.current = true;
+        if (hlsFreezeTimeoutRef.current) {
+          clearTimeout(hlsFreezeTimeoutRef.current);
+          hlsFreezeTimeoutRef.current = null;
+        }
+
+        // Preserve current playback state so we can restore if browser
+        // briefly interrupts playback during the FS transition.
+        try {
+          const v = videoRef.current;
+          if (v) {
+            savedPosRef.current = v.currentTime || 0;
+            wasPlayingRef.current = !v.paused && !v.ended;
+          }
+        } catch (e) {}
+
+        // If using HLS.js, freeze automatic level switching during the
+        // transition to avoid immediate ABR changes that cause buffering.
+        try {
+          const hls = hlsRef.current;
+          if (hls && typeof hls.currentLevel !== 'undefined') {
+            prevHlsLevelRef.current = hls.currentLevel;
+            try { hls.autoLevelEnabled = false; } catch (e) {}
+            try { if (prevHlsLevelRef.current >= 0) hls.currentLevel = prevHlsLevelRef.current; } catch (e) {}
+            try { if (prevHlsLevelRef.current >= 0) hls.nextLevel = prevHlsLevelRef.current; } catch (e) {}
+          }
+        } catch (e) {}
+
+        // end transition flag after a short grace period
+        setTimeout(() => {
+          try { fullscreenTransitionRef.current = false; } catch (e) {}
+        }, 700);
+      } catch (e) {}
+
       setIsFullscreen(isFs);
       setShowControls(true);
       clearHideControls();
-      if (!isFs) {
-        setTimeout(updateVideoSizing, 100);
-        scheduleHideControls(3000);
-      }
+
+      // after the fullscreen transition settle, restore HLS ABR and
+      // playback position/state
+      hlsFreezeTimeoutRef.current = setTimeout(() => {
+        try {
+          const hls = hlsRef.current;
+          if (hls) {
+            try { if (typeof prevHlsLevelRef.current !== 'undefined' && prevHlsLevelRef.current !== null) {
+              try { hls.currentLevel = prevHlsLevelRef.current; } catch (e) {}
+              try { hls.nextLevel = prevHlsLevelRef.current; } catch (e) {}
+            } } catch (e) {}
+            try { hls.autoLevelEnabled = true; } catch (e) {}
+          }
+        } catch (e) {}
+
+        try {
+          const v = videoRef.current;
+          if (v && savedPosRef.current != null && !isNaN(savedPosRef.current)) {
+            try { v.currentTime = savedPosRef.current; } catch (e) {}
+          }
+          if (v && wasPlayingRef.current) {
+            try { v.play(); } catch (e) {}
+          }
+        } catch (e) {}
+
+        prevHlsLevelRef.current = null;
+        hlsFreezeTimeoutRef.current = null;
+
+        if (!isFs) {
+          setTimeout(updateVideoSizing, 100);
+          scheduleHideControls(3000);
+        }
+      }, 600);
     };
     document.addEventListener("fullscreenchange", handleFullscreenChange);
 
@@ -1631,8 +1724,12 @@ function VideoPlayer({ video = null }) {
       if (speedMenuOpen && speedRef.current && !speedRef.current.contains(e.target)) {
         setSpeedMenuOpen(false);
       }
-      if (settingsMenuOpen && settingsRef.current && !settingsRef.current.contains(e.target)) {
-        setSettingsMenuOpen(false);
+      if (settingsMenuOpen) {
+        const clickedInsideButton = settingsRef.current && settingsRef.current.contains(e.target);
+        const clickedInsideMenu = settingsMenuRef.current && settingsMenuRef.current.contains(e.target);
+        if (!clickedInsideButton && !clickedInsideMenu) {
+          setSettingsMenuOpen(false);
+        }
       }
     };
     const onEsc = (e) => {
@@ -1653,11 +1750,19 @@ function VideoPlayer({ video = null }) {
   // Close the small fixed settings menu on scroll/resize to avoid misplaced popovers
   useEffect(() => {
     if (!settingsMenuOpen) return;
-    const onClose = () => {
+    const onClose = (e) => {
+      // ignore scrolls/resize that originate from inside the settings menu
+      try {
+        if (e && e.target) {
+          if (settingsRef.current && settingsRef.current.contains(e.target)) return;
+          if (settingsMenuRef.current && settingsMenuRef.current.contains(e.target)) return;
+        }
+      } catch (err) {}
       setSettingsMenuOpen(false);
       setSettingsMenuPos(null);
     };
     window.addEventListener('resize', onClose);
+    // use capture to catch scrolls early but ignore those originating inside the menu
     window.addEventListener('scroll', onClose, true);
     return () => {
       window.removeEventListener('resize', onClose);
@@ -1682,101 +1787,96 @@ function VideoPlayer({ video = null }) {
     return () => window.removeEventListener("resize", handleResize);
   }, [updateVideoSizing]);
 
-  // أيقونات SVG
+  // أيقونات SVG مع تصميم محسّن
   const Icons = {
     Play: () => (
       <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M8 5V19L19 12L8 5Z" />
+        <path d="M8 5V19L19 12L8 5Z" className="drop-shadow-lg" />
       </svg>
     ),
     Replay10: () => (
-      <svg className="w-5 h-5 sm:w-6 sm:h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
-        <circle cx="12" cy="12" r="9" strokeWidth="1.4" fill="none" />
+      <svg className="w-5 h-5 sm:w-6 sm:h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <circle cx="12" cy="12" r="9" strokeWidth="1.6" fill="none" className="opacity-80" />
         <path d="M8.5 9.5L5.5 12L8.5 14.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
         <path d="M9.5 7.5A6 6 0 0 1 17 12" strokeLinecap="round" fill="none" strokeWidth="1.4" />
       </svg>
     ),
     Pause: () => (
       <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
-        <rect x="6" y="5" width="4" height="14" />
-        <rect x="14" y="5" width="4" height="14" />
+        <rect x="6" y="5" width="4" height="14" rx="1" className="drop-shadow-lg" />
+        <rect x="14" y="5" width="4" height="14" rx="1" className="drop-shadow-lg" />
       </svg>
     ),
     Forward10: () => (
-      <svg className="w-5 h-5 sm:w-6 sm:h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
-        <circle cx="12" cy="12" r="9" strokeWidth="1.4" fill="none" />
+      <svg className="w-5 h-5 sm:w-6 sm:h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+        <circle cx="12" cy="12" r="9" strokeWidth="1.6" fill="none" className="opacity-80" />
         <path d="M15.5 9.5L18.5 12L15.5 14.5" strokeLinecap="round" strokeLinejoin="round" fill="none" />
         <path d="M14.5 7.5A6 6 0 0 0 7 12" strokeLinecap="round" fill="none" strokeWidth="1.4" />
       </svg>
     ),
     Settings: () => (
       <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M12 15.5C13.93 15.5 15.5 13.93 15.5 12C15.5 10.07 13.93 8.5 12 8.5C10.07 8.5 8.5 10.07 8.5 12C8.5 13.93 10.07 15.5 12 15.5Z" />
-        <path d="M19.43 12.97C19.47 12.65 19.5 12.33 19.5 12C19.5 11.67 19.47 11.34 19.43 11.01L21.54 9.37C21.73 9.22 21.78 8.95 21.66 8.73L19.66 5.27C19.54 5.05 19.27 4.96 19.05 5.05L16.56 6.05C16.04 5.66 15.5 5.32 14.87 5.07L14.5 2.42C14.46 2.18 14.25 2 14 2H10C9.75 2 9.54 2.18 9.5 2.42L9.13 5.07C8.5 5.32 7.96 5.66 7.44 6.05L4.95 5.05C4.73 4.96 4.46 5.05 4.34 5.27L2.34 8.73C2.22 8.95 2.27 9.22 2.46 9.37L4.57 11.01C4.53 11.34 4.5 11.67 4.5 12C4.5 12.33 4.53 12.65 4.57 12.97L2.46 14.63C2.27 14.78 2.22 15.05 2.34 15.27L4.34 18.73C4.46 18.95 4.73 19.03 4.95 18.95L7.44 17.94C7.96 18.34 8.5 18.68 9.13 18.93L9.5 21.58C9.54 21.82 9.75 22 10 22H14C14.25 22 14.46 21.82 14.5 21.58L14.87 18.93C15.5 18.68 16.04 18.34 16.56 17.94L19.05 18.95C19.27 19.03 19.54 18.95 19.66 18.73L21.66 15.27C21.78 15.05 21.73 14.78 21.54 14.63L19.43 12.97Z" />
+        <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z" />
       </svg>
     ),
     VolumeOff: () => (
       <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M16.5 12C16.5 10.23 15.48 8.71 14 7.97V10.18L16.45 12.63C16.48 12.43 16.5 12.22 16.5 12Z" />
-        <path d="M19 12C19 12.94 18.8 13.82 18.46 14.64L19.97 16.15C20.62 14.91 21 13.5 21 12C21 7.72 18.01 4.14 14 3.23V5.29C16.89 6.15 19 8.83 19 12Z" />
-        <path d="M4.27 3L3 4.27L7.73 9H3V15H7L12 20V13.27L16.25 17.52C15.58 18.04 14.83 18.46 14 18.7V20.77C15.38 20.45 16.63 19.82 17.68 18.93L19.73 21L21 19.73L12 10.73L4.27 3Z" />
+        <path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27l7.73 7.73V13h-4v4h4v-2.73l4.52 4.52C14.42 18.04 13.83 18.46 13 18.7v2.77c1.38-.32 2.63-.95 3.68-1.84L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z" />
       </svg>
     ),
     VolumeLow: () => (
       <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M7 9V15H11L16 20V4L11 9H7Z" />
+        <path d="M7 9v6h4l5 5V4l-5 5H7z" />
       </svg>
     ),
     VolumeHigh: () => (
       <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M3 9V15H7L12 20V4L7 9H3Z" />
-        <path d="M16.5 12C16.5 10.23 15.48 8.71 14 7.97V16.02C15.48 15.29 16.5 13.77 16.5 12Z" />
-        <path d="M14 3.23V5.29C16.89 6.15 19 8.83 19 12C19 15.17 16.89 17.85 14 18.71V20.77C18.01 19.86 21 16.28 21 12C21 7.72 18.01 4.14 14 3.23Z" />
+        <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z" />
       </svg>
     ),
     Fullscreen: () => (
       <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M7 14H5V19H10V17H7V14Z" />
-        <path d="M5 10H7V7H10V5H5V10Z" />
-        <path d="M17 17H14V19H19V14H17V17Z" />
-        <path d="M14 5V7H17V10H19V5H14Z" />
+        <path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z" />
       </svg>
     ),
     FullscreenExit: () => (
       <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M5 16H8V19H10V14H5V16Z" />
-        <path d="M8 8H5V10H10V5H8V8Z" />
-        <path d="M14 19H16V16H19V14H14V19Z" />
-        <path d="M16 8V5H14V10H19V8H16Z" />
+        <path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z" />
       </svg>
     ),
     Quality: () => (
       <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M19 4H5C3.89 4 3 4.9 3 6V18C3 19.1 3.89 20 5 20H19C20.1 20 21 19.1 21 18V6C21 4.9 20.11 4 19 4ZM19 18H5V6H19V18Z" />
-        <path d="M7.5 13.5H9.5V15H7.5V13.5Z" />
-        <path d="M11.5 13.5H13.5V15H11.5V13.5Z" />
-        <path d="M15.5 13.5H17.5V15H15.5V13.5Z" />
+        <path d="M19 4H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zm0 14H5V6h14v12z" />
+        <path d="M7.5 13.5h2v2h-2z" />
+        <path d="M11.5 13.5h2v2h-2z" />
+        <path d="M15.5 13.5h2v2h-2z" />
       </svg>
     ),
     Speed: () => (
       <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M20.38 8.57L13.92 2.2C13.72 2.07 13.56 2 13.3 2H6.5C5.67 2 5 2.67 5 3.5V20.5C5 21.33 5.67 22 6.5 22H17.5C18.33 22 19 21.33 19 20.5V9.3C19 9.04 18.93 8.78 18.7 8.58L20.38 8.57Z" />
-        <path d="M12 17.5C10.07 17.5 8.5 15.93 8.5 14C8.5 12.07 10.07 10.5 12 10.5C13.93 10.5 15.5 12.07 15.5 14C15.5 15.93 13.93 17.5 12 17.5Z" />
+        <path d="M20.38 8.57l-6.46-6.37c-.2-.19-.56-.2-.76 0L6.5 3.5C5.67 3.5 5 4.17 5 5v15c0 .83.67 1.5 1.5 1.5h11c.83 0 1.5-.67 1.5-1.5V9.3c0-.26-.07-.52-.24-.73l-2.38-2zm-8.38 9c-1.93 0-3.5-1.57-3.5-3.5s1.57-3.5 3.5-3.5 3.5 1.57 3.5 3.5-1.57 3.5-3.5 3.5z" />
+        <circle cx="12" cy="14" r="2.5" fill="#fff" />
       </svg>
     ),
     ChevronDown: () => (
       <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M7.41 8.59L12 13.17L16.59 8.59L18 10L12 16L6 10L7.41 8.59Z" />
+        <path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z" />
       </svg>
     ),
     PlayArrow: () => (
-      <svg className="w-8 h-8 sm:w-10 sm:h-10" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M8 5V19L19 12L8 5Z" />
+      <svg className="w-10 h-10 sm:w-12 sm:h-12" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M8 5v14l11-7z" className="drop-shadow-2xl" />
       </svg>
     ),
     PauseCircle: () => (
-      <svg className="w-8 h-8 sm:w-10 sm:h-10" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M9 16H11V8H9V16ZM13 8V16H15V8H13ZM12 2C6.48 2 2 6.48 2 12C2 17.52 6.48 22 12 22C17.52 22 22 17.52 22 12C22 6.48 17.52 2 12 2ZM12 20C7.59 20 4 16.41 4 12C4 7.59 7.59 4 12 4C16.41 4 20 7.59 20 12C20 16.41 16.41 20 12 20Z" />
+      <svg className="w-10 h-10 sm:w-12 sm:h-12" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M9 16h2V8H9v8zm3-14C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm1-4h2V8h-2v8z" />
+      </svg>
+    ),
+    Download: () => (
+      <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M12 2v8m0 0l3-3m-3 3l-3-3" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M4 12v6a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6" strokeLinecap="round" />
       </svg>
     ),
   };
@@ -1786,8 +1886,8 @@ function VideoPlayer({ video = null }) {
   return (
     <div className="space-y-2 relative">
       <div
-        className={`relative w-full bg-gradient-to-br from-gray-900 to-black rounded-xl 
-          ${isFullscreen ? "fixed inset-0 z-50 rounded-none overflow-visible" : "aspect-video max-h-[70vh] shadow-lg overflow-hidden"} ${showControls ? "" : "cursor-none"}`}
+        className={`relative w-full bg-gradient-to-br from-gray-900 via-gray-950 to-black rounded-2xl 
+          ${isFullscreen ? "fixed inset-0 z-50 rounded-none overflow-visible" : "aspect-video max-h-[70vh] shadow-2xl overflow-hidden"} ${showControls ? "" : "cursor-none"}`}
         ref={containerRef}
         style={isFullscreen ? { paddingBottom: `calc(env(safe-area-inset-bottom, 0px) + 1.5rem + ${fullscreenBottomInset}px)` } : undefined}
         onClick={(e) => {
@@ -1860,7 +1960,12 @@ function VideoPlayer({ video = null }) {
           }
           playsInline
           preload="metadata"
-          onWaiting={() => setLoading(true)}
+          onWaiting={() => {
+            try {
+              if (fullscreenTransitionRef.current) return;
+            } catch (e) {}
+            setLoading(true);
+          }}
           onCanPlay={() => setLoading(false)}
           onCanPlayThrough={() => setLoading(false)}
           onLoadedMetadata={(e) => {
@@ -1870,87 +1975,101 @@ function VideoPlayer({ video = null }) {
               setLoading(false);
             } catch (err) {}
           }}
+          className="video-player"
         ></video>
 
-        {/* overlay that intercepts clicks during pending/active long-press */}
-        {(isPendingLongPress || isLongPressActive) && (
-          <div className="absolute inset-0 z-[100000]" style={{ pointerEvents: 'auto' }} />
-        )}
-
-        {/* مؤشر التحميل */}
-        {loading && (
-          <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/50">
-            <div className="flex flex-col items-center gap-2">
-              <svg className="w-12 h-12 text-white animate-spin" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-              </svg>
-              <div className="text-white/90 text-sm">جارٍ التحميل...</div>
+        {/* Title overlay shown on the video when controls are visible */}
+        {video?.title && (
+          <div
+            className={`absolute left-4 right-4 top-4 z-50 transition-all duration-300 transform ${showControls ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-4 pointer-events-none"}`}
+            style={isFullscreen ? { top: `calc(env(safe-area-inset-top, 0px) + 1rem)` } : undefined}
+          >
+            <div className="mx-auto max-w-full bg-gradient-to-r from-black/70 via-black/50 to-transparent backdrop-blur-lg text-white/95 rounded-xl px-4 py-3 text-sm sm:text-base font-bold truncate shadow-2xl border border-white/10">
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
+                {video.title}
+              </div>
             </div>
           </div>
         )}
 
+        {/* overlay that intercepts clicks during pending/active long-press */}
+        {(isPendingLongPress || isLongPressActive) && (
+          <div className="absolute inset-0 z-[100000] bg-gradient-to-br from-red-500/5 to-cyan-500/5" style={{ pointerEvents: 'auto' }} />
+        )}
+
+        {/* مؤشر التحميل: تم نقله داخل زر التشغيل المركزي لعدم تكرار الواجهات */}
+
         {/* ردود الفعل المرئية */}
         {actionFeedback.visible && actionFeedback.position === 'center' && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-40">
-            <div className="flex flex-col items-center gap-2 bg-black/40 text-white/95 px-4 py-3 rounded-xl backdrop-blur-sm">
-              <div className="text-3xl">{actionFeedback.icon ? actionFeedback.icon() : null}</div>
-              <div className="text-sm font-medium">{actionFeedback.text}</div>
+            <div className="flex flex-col items-center gap-3 bg-gradient-to-br from-black/70 to-gray-900/70 text-white/95 px-6 py-4 rounded-2xl backdrop-blur-xl border border-white/20 shadow-2xl animate-scale-in">
+              <div className="text-4xl bg-gradient-to-r from-red-500 to-cyan-500 bg-clip-text text-transparent">
+                {actionFeedback.icon ? actionFeedback.icon() : null}
+              </div>
+              <div className="text-lg font-bold tracking-wide">{actionFeedback.text}</div>
             </div>
           </div>
         )}
 
         {actionFeedback.visible && actionFeedback.position === 'top' && (
           <div className="absolute left-1/2 transform -translate-x-1/2 pointer-events-none z-50" style={{ top: '25%' }}>
-            <div className="flex flex-col items-center gap-2 bg-black/40 text-white/95 px-3 py-2 rounded-xl backdrop-blur-sm">
-              <div className="text-2xl">{actionFeedback.icon ? actionFeedback.icon() : null}</div>
-              <div className="text-sm font-medium">{actionFeedback.text}</div>
+            <div className="flex flex-col items-center gap-2 bg-gradient-to-br from-black/70 to-gray-900/70 text-white/95 px-4 py-3 rounded-xl backdrop-blur-xl border border-white/20 shadow-2xl animate-scale-in">
+              <div className="text-3xl">{actionFeedback.icon ? actionFeedback.icon() : null}</div>
+              <div className="text-sm font-bold tracking-wide">{actionFeedback.text}</div>
             </div>
           </div>
         )}
 
         {actionFeedback.visible && actionFeedback.position === 'left' && (
-          <div className="absolute top-1/2 left-6 transform -translate-y-1/2 pointer-events-none z-40">
-            <div className="flex flex-col items-center gap-2 bg-black/40 text-white/95 px-3 py-2 rounded-xl backdrop-blur-sm">
-              <div className="text-2xl">{actionFeedback.icon ? actionFeedback.icon() : null}</div>
-              <div className="text-sm font-medium">{actionFeedback.text}</div>
+          <div className="absolute top-1/2 left-8 transform -translate-y-1/2 pointer-events-none z-40 animate-slide-in-left">
+            <div className="flex flex-col items-center gap-2 bg-gradient-to-br from-black/70 to-gray-900/70 text-white/95 px-4 py-3 rounded-xl backdrop-blur-xl border border-white/20 shadow-2xl">
+              <div className="text-3xl">{actionFeedback.icon ? actionFeedback.icon() : null}</div>
+              <div className="text-sm font-bold tracking-wide">{actionFeedback.text}</div>
             </div>
           </div>
         )}
 
         {actionFeedback.visible && actionFeedback.position === 'right' && (
-          <div className="absolute top-1/2 right-6 transform -translate-y-1/2 pointer-events-none z-40">
-            <div className="flex flex-col items-center gap-2 bg-black/40 text-white/95 px-3 py-2 rounded-xl backdrop-blur-sm">
-              <div className="text-2xl">{actionFeedback.icon ? actionFeedback.icon() : null}</div>
-              <div className="text-sm font-medium">{actionFeedback.text}</div>
+          <div className="absolute top-1/2 right-8 transform -translate-y-1/2 pointer-events-none z-40 animate-slide-in-right">
+            <div className="flex flex-col items-center gap-2 bg-gradient-to-br from-black/70 to-gray-900/70 text-white/95 px-4 py-3 rounded-xl backdrop-blur-xl border border-white/20 shadow-2xl">
+              <div className="text-3xl">{actionFeedback.icon ? actionFeedback.icon() : null}</div>
+              <div className="text-sm font-bold tracking-wide">{actionFeedback.text}</div>
             </div>
           </div>
         )}
 
         {seekFeedback.visible && !actionFeedback.visible && (
-          <div className={`absolute top-1/2 transform -translate-y-1/2 ${seekFeedback.type === "forward" ? "right-6" : "left-6"} pointer-events-none z-40`}>
-            <div className="flex flex-col items-center gap-2 bg-black/40 text-white/95 px-3 py-2 rounded-xl backdrop-blur-sm">
-              <div className="text-2xl">
+          <div className={`absolute top-1/2 transform -translate-y-1/2 ${seekFeedback.type === "forward" ? "right-8" : "left-8"} pointer-events-none z-40 animate-slide-in-${seekFeedback.type === "forward" ? "right" : "left"}`}>
+            <div className="flex flex-col items-center gap-2 bg-gradient-to-br from-black/70 to-gray-900/70 text-white/95 px-4 py-3 rounded-xl backdrop-blur-xl border border-white/20 shadow-2xl">
+              <div className="text-3xl">
                 {seekFeedback.type === "forward" ? <Icons.Forward10 /> : <Icons.Replay10 />}
               </div>
-              <div className="text-sm font-medium">{seekFeedback.time}</div>
+              <div className="text-sm font-bold tracking-wide">{seekFeedback.time}</div>
             </div>
           </div>
         )}
 
         {rateFeedback.visible && !actionFeedback.visible && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-40">
-            <div className="flex flex-col items-center gap-2 bg-black/40 text-white/95 px-4 py-3 rounded-xl backdrop-blur-sm">
-              <div className="text-2xl font-semibold">{rateFeedback.rate}x</div>
+            <div className="flex flex-col items-center gap-2 bg-gradient-to-br from-black/70 to-gray-900/70 text-white/95 px-6 py-4 rounded-2xl backdrop-blur-xl border border-white/20 shadow-2xl animate-scale-in">
+              <div className="text-3xl font-bold bg-gradient-to-r from-red-500 to-cyan-500 bg-clip-text text-transparent">{rateFeedback.rate}x</div>
+              <div className="text-sm font-medium opacity-80">سرعة التشغيل</div>
             </div>
           </div>
         )}
 
         {volumeFeedback.visible && !actionFeedback.visible && (
-          <div className="absolute left-1/2 transform -translate-x-1/2 z-40 pointer-events-none" style={{ top: '6%' }}>
-            <div className="flex flex-col items-center gap-1 bg-black/40 text-white/95 px-3 py-2 rounded-xl backdrop-blur-sm">
-              <div className="text-sm">مستوى الصوت</div>
-              <div className="text-lg font-semibold">{volumeFeedback.volume}%</div>
+          <div className="absolute left-1/2 transform -translate-x-1/2 z-40 pointer-events-none animate-slide-in-top" style={{ top: '6%' }}>
+            <div className="flex flex-col items-center gap-1 bg-gradient-to-br from-black/70 to-gray-900/70 text-white/95 px-4 py-3 rounded-xl backdrop-blur-xl border border-white/20 shadow-2xl">
+              <div className="text-sm opacity-80">مستوى الصوت</div>
+              <div className="text-2xl font-bold bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">{volumeFeedback.volume}%</div>
+              <div className="w-32 h-2 bg-gray-700 rounded-full overflow-hidden mt-1">
+                <div 
+                  className="h-full bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full transition-all duration-300"
+                  style={{ width: `${volumeFeedback.volume}%` }}
+                />
+              </div>
             </div>
           </div>
         )}
@@ -1958,28 +2077,32 @@ function VideoPlayer({ video = null }) {
         {/* تقدم التحميل */}
         {isDownloading && downloadProgress != null && (
           <div
-            className="absolute left-1/2 -translate-x-1/2 bottom-4 z-40 pointer-events-none w-2/5"
+            className="absolute left-1/2 -translate-x-1/2 bottom-4 z-40 pointer-events-none w-2/5 animate-pulse"
             style={isFullscreen ? { bottom: `calc(1rem + env(safe-area-inset-bottom) + ${fullscreenBottomInset}px)` } : undefined}
           >
-            <div className="w-full h-2 bg-white/20 rounded-full overflow-hidden shadow-inner">
+            <div className="w-full h-2.5 bg-white/20 rounded-full overflow-hidden shadow-inner">
               <div
-                className="h-full bg-cyan-500 transition-all"
+                className="h-full bg-gradient-to-r from-cyan-500 via-blue-500 to-purple-500 rounded-full transition-all duration-300 shadow-lg"
                 style={{ width: `${downloadProgress}%` }}
               />
+            </div>
+            <div className="text-center mt-2 text-sm font-bold text-white/90 tracking-wide">
+              جاري التحميل {downloadProgress}%
             </div>
           </div>
         )}
 
         {/* رسالة الخطأ */}
         {error && showErrorOverlay && (
-          <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-black/90 to-gray-900/90 backdrop-blur-md">
-            <div className="text-center p-8 bg-gradient-to-br from-gray-900 to-black rounded-2xl max-w-sm border border-white/10 shadow-2xl">
-              <div className="text-red-400 text-xl mb-4 font-semibold flex items-center justify-center gap-2">
-                <span className="text-2xl">⚠️</span> {error}
+          <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-black/95 via-gray-900/95 to-black/95 backdrop-blur-xl animate-fade-in" style={{ zIndex: 2147483647, pointerEvents: 'auto' }}>
+            <div className="text-center p-8 bg-gradient-to-br from-gray-900 to-black rounded-3xl max-w-sm border border-white/10 shadow-2xl">
+              <div className="text-red-400 text-2xl mb-4 font-bold flex items-center justify-center gap-3">
+                <span className="text-3xl animate-pulse">⚠️</span> 
+                <span className="bg-gradient-to-r from-red-400 to-orange-400 bg-clip-text text-transparent">{error}</span>
               </div>
               <button
                 onClick={retryPlayback}
-                className="px-6 py-3 bg-gradient-to-r from-red-600 to-red-700 text-white rounded-xl transition duration-150 shadow-lg  font-medium"
+                className="px-8 py-3.5 bg-gradient-to-r from-red-600 via-orange-500 to-red-700 text-white rounded-xl transition-all duration-300 shadow-lg hover:shadow-red-500/25 hover:scale-105 active:scale-95 font-bold text-lg"
               >
                 إعادة المحاولة
               </button>
@@ -1989,8 +2112,8 @@ function VideoPlayer({ video = null }) {
 
         {/* عناصر التحكم المركزية */}
         {showControls && (
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-[99999]">
-            <div className="flex items-center gap-3 sm:gap-4 md:gap-6 pointer-events-auto">
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-[99999] animate-fade-in">
+            <div className="flex items-center gap-4 sm:gap-6 md:gap-8 pointer-events-auto">
               <button
                 type="button"
                 aria-label="تأخير 5 ث"
@@ -2001,19 +2124,33 @@ function VideoPlayer({ video = null }) {
                   setCurrentTime(v.currentTime);
                   showActionFeedbackPos(Icons.Replay10, "-5s", 800, 'left');
                 }}
-                className="controls-button flex items-center justify-center w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-black/60 text-white shadow-lg transition-transform "
+                className="controls-button flex items-center justify-center w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-gradient-to-br from-gray-900/80 to-black/80 text-white shadow-2xl transition-all duration-300 hover:scale-110 hover:shadow-cyan-500/25 active:scale-95 backdrop-blur-sm"
               >
                 <Icons.Replay10 />
               </button>
 
               <button
                 type="button"
-                aria-label={isPlaying ? "إيقاف" : "تشغيل"}
-                onClick={togglePlayPauseImmediate}
+                aria-label={loading ? "جارٍ التحميل" : (isPlaying ? "إيقاف" : "تشغيل")}
+                onClick={(e) => {
+                  try {
+                    if (loading) return;
+                    togglePlayPauseImmediate();
+                  } catch (err) {}
+                }}
                 ref={centerPlayRef}
-                className="controls-button flex items-center justify-center w-16 h-16 md:w-20 md:h-20 rounded-full bg-gradient-to-br from-red-600 to-red-700 text-white shadow-2xl transition-transform  z-[99999]"
+                className={`controls-button center-control flex items-center justify-center w-16 h-16 md:w-20 md:h-20 rounded-full ${loading ? "bg-gradient-to-br from-gray-800 to-black" : "bg-gradient-to-br from-red-600 via-red-500 to-orange-500"} text-white shadow-3xl transition-all duration-300 hover:scale-105 hover:shadow-red-500/50 active:scale-95 z-[99999] relative overflow-hidden group`}
+                disabled={loading}
               >
-                {isPlaying ? <Icons.PauseCircle /> : <Icons.PlayArrow />}
+                {loading ? (
+                  <svg className="w-10 h-10 text-white animate-spin" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" fill="none" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                  </svg>
+                ) : (isPlaying ? <Icons.PauseCircle /> : <Icons.PlayArrow />)}
+                
+                {/* تأثير توهج */}
+                <div className={`absolute inset-0 rounded-full ${isPlaying ? "bg-gradient-to-r from-red-500/20 to-orange-500/20" : "bg-gradient-to-r from-red-600/20 to-cyan-500/20"} blur-xl group-hover:blur-2xl transition-all duration-500`}></div>
               </button>
 
               <button
@@ -2026,7 +2163,7 @@ function VideoPlayer({ video = null }) {
                   setCurrentTime(v.currentTime);
                   showActionFeedbackPos(Icons.Forward10, "+5s", 800, 'right');
                 }}
-                className="controls-button flex items-center justify-center w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-black/60 text-white shadow-lg transition-transform  z-[99999]"
+                className="controls-button flex items-center justify-center w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-gradient-to-br from-gray-900/80 to-black/80 text-white shadow-2xl transition-all duration-300 hover:scale-110 hover:shadow-cyan-500/25 active:scale-95 backdrop-blur-sm z-[99999]"
               >
                 <Icons.Forward10 />
               </button>
@@ -2036,15 +2173,25 @@ function VideoPlayer({ video = null }) {
 
         {/* شريط التقدم */}
         <div
-          className={`absolute left-0 right-0 bottom-16 px-2 transition-opacity duration-200 z-50 bg-black/20 backdrop-blur-sm rounded-md ${showControls ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"}`}
+          className={`absolute left-0 right-0 bottom-16  transition-all duration-300 transform z-50 bg-gradient-to-t from-black/60 via-black/40 to-transparent backdrop-blur-sm ${showControls ? "opacity-100 translate-y-0 pointer-events-auto" : "opacity-0 translate-y-4 pointer-events-none"}`}
           style={isFullscreen ? { bottom: `calc(4rem + env(safe-area-inset-bottom) + ${fullscreenBottomInset}px)` } : undefined}
         >
-          <div className="flex items-center gap-3">
-            <div className="text-white/90 font-medium text-sm">
-              <span className="bg-black/30 px-2 py-1 rounded-md">
-                {formatTime(currentTime)}
+          <div className="flex items-center gap-3 px-4 py-3">
+            <div className="text-white/90 font-bold text-sm bg-black/30 px-3 py-1.5 rounded-lg">
+              <span
+                className="cursor-pointer select-none transition-all duration-200 hover:text-cyan-400"
+                onClick={(e) => {
+                  try {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setShowRemaining((s) => !s);
+                  } catch (err) {}
+                }}
+                title={showRemaining ? "اضغط لإظهار الوقت المنقضي" : "اضغط لإظهار الوقت المتبقي"}
+              >
+                {showRemaining && duration ? `-${formatTime(Math.max(0, duration - currentTime))}` : formatTime(currentTime)}
               </span>
-              <span className="text-white/70 ml-2">/ {formatTime(duration)}</span>
+              <span className="text-white/60 ml-2 font-medium">/ {formatTime(duration)}</span>
             </div>
 
             <div className="flex-1">
@@ -2056,11 +2203,12 @@ function VideoPlayer({ video = null }) {
                 aria-valuenow={currentTime}
                 tabIndex={0}
                 ref={progressRef}
-                className={`relative cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 h-3 sm:h-2 bg-gradient-to-r from-gray-800/60 to-gray-800/30 rounded-full shadow-inner`}
+                className={`relative cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 h-2.5 sm:h-3 bg-gradient-to-r from-gray-800/40 to-gray-800/20 rounded-full shadow-inner overflow-hidden group`}
                 onClick={handleSeek}
                 onMouseDown={handlePointerSeekStart}
-                onMouseEnter={() => setHoverProgress(true)}
-                onMouseLeave={() => setHoverProgress(false)}
+                onMouseEnter={(e) => { setHoverProgress(true); handleProgressMouseMove && handleProgressMouseMove(e); }}
+                onMouseLeave={() => { setHoverProgress(false); setHoverTime(null); }}
+                onMouseMove={(e) => { handleProgressMouseMove && handleProgressMouseMove(e); }}
                 onKeyDown={(e) => {
                   if (!duration || !videoRef.current) return;
                   switch (e.key) {
@@ -2088,7 +2236,7 @@ function VideoPlayer({ video = null }) {
                 }}
               >
                 <div
-                  className="absolute top-0 h-full bg-gradient-to-r from-gray-400/40 to-gray-300/40 rounded-full"
+                  className="absolute top-0 h-full bg-gradient-to-r from-gray-500/30 to-gray-400/30 rounded-full transition-all duration-500"
                   style={{
                     [isProgressRtl() ? "right" : "left"]: 0,
                     width: `${bufferedPercent || 0}%`,
@@ -2097,7 +2245,7 @@ function VideoPlayer({ video = null }) {
                 />
 
                 <div
-                  className={`absolute top-0 h-full rounded-full shadow-lg ${hoverProgress ? "bg-gradient-to-r from-cyan-400 via-cyan-500 to-cyan-600" : "bg-gradient-to-r from-red-500 via-red-600 to-red-700"}`}
+                  className={`absolute top-0 h-full rounded-full shadow-lg transition-all duration-300 ${hoverProgress ? "bg-gradient-to-r from-red-500 via-cyan-500 to-blue-600" : "bg-gradient-to-r from-red-600 via-red-500 to-orange-500"}`}
                   style={{
                     [isProgressRtl() ? "right" : "left"]: 0,
                     width: `${progressPct}%`,
@@ -2106,13 +2254,11 @@ function VideoPlayer({ video = null }) {
                 />
 
                 <div
-                  className={`absolute top-1/2 -translate-y-1/2 cursor-pointer transition duration-150 rounded-full bg-white border-2 ${hoverProgress ? "border-cyan-400" : "border-red-600"} shadow-xl`}
+                  className={`absolute top-1/2 -translate-y-1/2 cursor-pointer transition-all duration-300 rounded-full ${hoverProgress ? "w-4 h-4 bg-white shadow-xl border-2 border-cyan-400" : "w-3 h-3 bg-white shadow-lg border-2 border-red-500"} group-hover:w-4 group-hover:h-4`}
                   style={{
                     [isProgressRtl() ? "right" : "left"]: `${progressPct}%`,
-                    transform: isProgressRtl() ? "translate(50%, -50%)" : "translate(-50%, -50%)",
-                    zIndex: 2,
-                    width: "0.9rem",
-                    height: "0.9rem",
+                      transform: isProgressRtl() ? "translate(50%, -50%)" : "translate(-50%, -50%)",
+                      zIndex: 2,
                   }}
                   aria-hidden
                 />
@@ -2123,14 +2269,14 @@ function VideoPlayer({ video = null }) {
 
         {/* زر ملء الشاشة */}
         <div
-          className={`absolute left-4 bottom-6 z-[9999999] transition-opacity duration-200 ${showControls ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"}`}
+          className={`absolute left-4 bottom-6 z-[9999999] transition-all duration-300 transform ${showControls ? "opacity-100 translate-y-0 pointer-events-auto" : "opacity-0 translate-y-4 pointer-events-none"}`}
           style={isFullscreen ? { bottom: `calc(1.5rem + env(safe-area-inset-bottom) + ${fullscreenBottomInset}px)` } : undefined}
         >
           <button
             type="button"
             onClick={toggleFullscreen}
             ref={fsButtonRef}
-            className="flex items-center justify-center rounded-full bg-gradient-to-br from-gray-900/80 to-black/80 text-white min-w-[36px] h-8 sm:min-w-[44px] sm:h-11 sm:w-10 shadow-lg transition-transform  focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 hover:bg-white/10 p-1"
+            className="flex items-center justify-center rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white w-12 h-12 shadow-2xl transition-all duration-300 hover:scale-110 hover:shadow-cyan-500/25 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 backdrop-blur-sm border border-white/10"
             aria-label={isFullscreen ? "خروج من ملء الشاشة" : "ملء الشاشة"}
           >
             {isFullscreen ? <Icons.FullscreenExit /> : <Icons.Fullscreen />}
@@ -2139,59 +2285,61 @@ function VideoPlayer({ video = null }) {
 
         {/* عناصر التحكم السفلية */}
         <div
-          className={`absolute left-0 right-0 bottom-4 px-2 transition-opacity duration-200 z-[99999] bg-black/20 backdrop-blur-sm rounded-md ${showControls ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"}`}
+          className={`absolute left-0 right-0 bottom-4 px-4 transition-all duration-300 transform z-[99999] bg-gradient-to-t from-black/70 via-black/50 to-transparent backdrop-blur-lg ${showControls ? "opacity-100 translate-y-0 pointer-events-auto" : "opacity-0 translate-y-4 pointer-events-none"}`}
         >
-          <div className="flex flex-row items-center justify-between gap-2 sm:gap-3">
-            <div className="flex items-center gap-2 sm:gap-3 flex-wrap w-full sm:w-auto justify-start">
+          <div className="flex flex-row items-center justify-between gap-3 sm:gap-5">
+            <div className="flex items-center gap-3 sm:gap-4 flex-wrap w-full sm:w-auto justify-start">
               <button
                 onClick={togglePlayPauseImmediate}
-                className="controls-button flex items-center justify-center rounded-full bg-gradient-to-br from-gray-900 to-black min-w-[44px] h-9 sm:min-w-[56px] sm:h-12 sm:w-14 text-white shadow-2xl  transition-transform  focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+                className="controls-button flex items-center justify-center rounded-xl bg-gradient-to-br from-gray-900 to-black w-12 h-12 text-white shadow-2xl transition-all duration-300 hover:scale-110 hover:shadow-cyan-500/25 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 backdrop-blur-sm border border-white/10"
                 aria-label={isPlaying ? "إيقاف" : "تشغيل"}
               >
                 {isPlaying ? <Icons.Pause /> : <Icons.Play />}
               </button>
 
-              <button
-                onClick={() => {
-                  if (volume > 0) {
-                    prevVolumeRef.current = volume;
-                    setVolume(0);
-                  } else {
-                    setVolume(prevVolumeRef.current > 0 ? prevVolumeRef.current : 1);
-                  }
-                }}
-                className="controls-button flex items-center justify-center rounded-full bg-gradient-to-br from-gray-900/80 to-black/80 min-w-[36px] h-8 sm:min-w-[44px] sm:h-11 sm:w-10 text-white shadow  transition-transform  focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
-                aria-label={volume === 0 ? "تشغيل الصوت" : "كتم الصوت"}
-              >
-                {volume === 0 ? (
-                  <Icons.VolumeOff />
-                ) : volume < 0.5 ? (
-                  <Icons.VolumeLow />
-                ) : (
-                  <Icons.VolumeHigh />
-                )}
-              </button>
+              <div className="flex items-center gap-2 bg-black/40 backdrop-blur-sm rounded-xl px-3 py-2 border border-white/10 volume-container">
+                <button
+                  onClick={() => {
+                    if (volume > 0) {
+                      prevVolumeRef.current = volume;
+                      setVolume(0);
+                    } else {
+                      setVolume(prevVolumeRef.current > 0 ? prevVolumeRef.current : 1);
+                    }
+                  }}
+                  className="controls-button flex items-center justify-center text-white transition-transform duration-200 hover:scale-110 active:scale-95"
+                  aria-label={volume === 0 ? "تشغيل الصوت" : "كتم الصوت"}
+                >
+                  {volume === 0 ? (
+                    <Icons.VolumeOff />
+                  ) : volume < 0.5 ? (
+                    <Icons.VolumeLow />
+                  ) : (
+                    <Icons.VolumeHigh />
+                  )}
+                </button>
 
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.01"
-                value={volume}
-                onChange={(e) => {
-                  const v = parseFloat(e.target.value);
-                  if (v > 0) prevVolumeRef.current = v;
-                  setVolume(v);
-                }}
-                onPointerDown={showControlsWithOptions}
-                onWheel={handleVolumeWheel}
-                onMouseEnter={() => disablePageScrollWhileInteracting()}
-                onMouseLeave={() => enablePageScrollAfterInteracting()}
-                onFocus={() => disablePageScrollWhileInteracting()}
-                onBlur={() => enablePageScrollAfterInteracting()}
-                className="hidden sm:block w-16 sm:w-28 ml-2 accent-red-600"
-                aria-label="مستوى الصوت"
-              />
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  value={volume}
+                  onChange={(e) => {
+                    const v = parseFloat(e.target.value);
+                    if (v > 0) prevVolumeRef.current = v;
+                    setVolume(v);
+                  }}
+                  onPointerDown={showControlsWithOptions}
+                  onWheel={handleVolumeWheel}
+                  onMouseEnter={() => disablePageScrollWhileInteracting()}
+                  onMouseLeave={() => enablePageScrollAfterInteracting()}
+                  onFocus={() => disablePageScrollWhileInteracting()}
+                  onBlur={() => enablePageScrollAfterInteracting()}
+                  className="volume-slider hidden sm:block w-0 sm:w-32 ml-2 transition-all duration-200 opacity-0"
+                  aria-label="مستوى الصوت"
+                />
+              </div>
 
               {/* قائمة الجودة (لشاشات كبيرة) */}
               <div className="relative hidden sm:block" ref={qualityRef}>
@@ -2204,27 +2352,31 @@ function VideoPlayer({ video = null }) {
                     ignoreDocClickRef.current = true;
                     setTimeout(() => (ignoreDocClickRef.current = false), 50);
                   }}
-                  className="controls-button flex items-center gap-2 rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-2 py-1 shadow-lg border border-white/10 min-w-[36px] h-8 sm:min-w-[44px] sm:h-10 transition-transform  focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+                  className="controls-button flex items-center gap-3 rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-4 py-3 shadow-2xl border border-white/10 transition-all duration-300 hover:scale-105 hover:shadow-cyan-500/25 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 backdrop-blur-sm"
                   aria-expanded={qualityMenuOpen}
                   aria-label="اختيار الجودة"
                 >
                   <Icons.Quality />
-                  <span className="font-medium">
+                  <span className="font-bold tracking-wide">
                     {currentQuality ? `${currentQuality}p` : "الجودة"}
                   </span>
                   <Icons.ChevronDown />
                 </button>
                 {qualityMenuOpen && video && video.qualities && (
-                  <div className="absolute bottom-12 right-0 bg-gradient-to-b from-gray-900 to-black border border-white/10 rounded-xl shadow-2xl py-2 z-50 w-52 backdrop-blur-lg max-h-60 overflow-y-auto">
+                  <div className="absolute bottom-16 right-0 bg-gradient-to-b from-gray-900 to-black border border-white/20 rounded-2xl shadow-2xl py-2 z-50 w-56 backdrop-blur-xl max-h-60 overflow-y-auto animate-scale-in">
+                    <div className="px-3 py-2 text-xs text-white/80 font-bold border-b border-white/10">اختر الجودة</div>
                     {[...video.qualities]
                       .sort((a, b) => parseInt(a.quality) - parseInt(b.quality))
                       .map((q) => (
                         <button
                           key={q.quality}
                           onClick={() => handleQualityChangePersist(q.quality)}
-                          className={`w-full text-right px-5 py-3 text-sm ${String(q.quality) === String(currentQuality) ? "bg-gradient-to-r from-red-600 to-red-800 text-white font-semibold" : "text-white/80"}`}
+                          className={`w-full text-right px-5 py-3 text-sm transition-all duration-200 ${String(q.quality) === String(currentQuality) ? "bg-gradient-to-r from-red-600 to-red-800 text-white font-bold" : "text-white/80 hover:bg-white/10 hover:text-white"}`}
                         >
-                          <span>{q.quality}p</span>
+                          <span className="flex items-center justify-between">
+                            <span className="text-xs opacity-70">{RES_MAP[q.quality] ? `${RES_MAP[q.quality].w}×${RES_MAP[q.quality].h}` : ""}</span>
+                            {q.quality}p
+                          </span>
                         </button>
                       ))}
                   </div>
@@ -2242,30 +2394,31 @@ function VideoPlayer({ video = null }) {
                     ignoreDocClickRef.current = true;
                     setTimeout(() => (ignoreDocClickRef.current = false), 50);
                   }}
-                  className="controls-button flex items-center gap-2 rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-2 py-1 shadow-lg border border-white/10 min-w-[36px] h-8 sm:min-w-[44px] sm:h-10 transition-transform focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+                    className="controls-button flex items-center gap-3 rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-4 py-3 shadow-2xl border border-white/10 transition-all duration-300 hover:scale-105 hover:shadow-cyan-500/25 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 backdrop-blur-sm"
                   aria-expanded={speedMenuOpen}
                   aria-label="اختيار السرعة"
                 >
                   <Icons.Speed />
-                  <span className="font-medium">{playbackRate.toFixed(2)}x</span>
+                  <span className="font-bold tracking-wide">{playbackRate.toFixed(2)}x</span>
                   <Icons.ChevronDown />
                 </button>
                 {speedMenuOpen && (
-                  <div className="absolute bottom-12 right-0 bg-gradient-to-b from-gray-900 to-black border border-white/10 rounded-2xl shadow-2xl w-56 p-3 backdrop-blur-lg z-50">
-                    <div className="flex flex-col items-center w-full gap-3 mb-3">
-                      <div className="flex items-center justify-center gap-3 w-full">
+                  <div className="absolute bottom-16 right-0 bg-gradient-to-b from-gray-900 to-black border border-white/20 rounded-2xl shadow-2xl w-64 p-4 backdrop-blur-xl z-50 animate-scale-in">
+                    <div className="flex flex-col items-center w-full gap-4 mb-3">
+                      <div className="text-lg font-bold text-white/90 mb-2">سرعة التشغيل</div>
+                      <div className="flex items-center justify-center gap-4 w-full">
                         <button
                           onClick={() => adjustRate(-0.05)}
-                          className="bg-black/60 text-white rounded-full w-8 h-8 flex items-center justify-center text-lg"
+                          className="bg-gradient-to-br from-gray-800 to-black text-white rounded-full w-10 h-10 flex items-center justify-center text-xl shadow-lg transition-all hover:scale-110 active:scale-95 border border-white/10"
                         >
                           −
                         </button>
-                        <div className="text-2xl font-semibold text-white">
+                        <div className="text-3xl font-bold bg-gradient-to-r from-red-500 to-cyan-500 bg-clip-text text-transparent">
                           {playbackRate.toFixed(2)}x
                         </div>
                         <button
                           onClick={() => adjustRate(0.05)}
-                          className="bg-black/60 text-white rounded-full w-8 h-8 flex items-center justify-center text-lg"
+                          className="bg-gradient-to-br from-gray-800 to-black text-white rounded-full w-10 h-10 flex items-center justify-center text-xl shadow-lg transition-all hover:scale-110 active:scale-95 border border-white/10"
                         >
                           +
                         </button>
@@ -2281,7 +2434,7 @@ function VideoPlayer({ video = null }) {
                           setPlaybackRate(v);
                           try { showActionFeedbackPos(Icons.Speed, `${v.toFixed(2)}x`, 800, 'top'); } catch (e) { showRateFeedback(v); }
                         }}
-                        className="w-full accent-red-600"
+                        className="w-full accent-gradient"
                         aria-label="شريط سرعة التشغيل"
                       />
                     </div>
@@ -2336,18 +2489,27 @@ function VideoPlayer({ video = null }) {
                     }
                     setSettingsMenuOpen(willOpen);
                     if (!willOpen) setSettingsMenuPos(null);
+
+                    // debug: log values so we can inspect why menu may not appear
+                    try {
+                      // eslint-disable-next-line no-console
+                      console.debug('[VideoPlayer] settings click', { willOpen, settingsMenuOpen, settingsMenuPos, rect: settingsRef.current && settingsRef.current.getBoundingClientRect() });
+                    } catch (e) {}
                   }}
-                  className="controls-button flex items-center justify-center rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-2 py-1 shadow-lg border border-white/10 min-w-[36px] h-8 transition-transform  focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+                  aria-expanded={settingsMenuOpen}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  className="controls-button settings-button flex items-center justify-center rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-3 py-3 shadow-2xl border border-white/10 w-12 h-12 transition-all duration-300 hover:scale-110 hover:shadow-cyan-500/25 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 backdrop-blur-sm"
                   aria-label="الإعدادات"
                 >
                   <Icons.Settings />
                 </button>
-                {settingsMenuOpen && (
+                {settingsMenuOpen && (typeof document !== 'undefined' ? createPortal(
                   <div
-                    className="fixed bg-gradient-to-b from-gray-900 to-black border border-white/10 rounded-md shadow-2xl z-[99999] w-36 max-h-64 overflow-y-auto backdrop-blur-lg p-2"
+                    ref={settingsMenuRef}
+                    className="fixed bg-gradient-to-b from-gray-900 to-black border border-white/20 rounded-2xl shadow-2xl z-[99999] w-40 max-h-64 overflow-y-auto backdrop-blur-xl p-3 animate-scale-in"
                     style={settingsMenuPos ? { left: `${settingsMenuPos.left}px`, top: `${settingsMenuPos.top}px` } : { right: '0.75rem', bottom: '5rem' }}
                   >
-                    <div className="px-2 pt-1 text-xs text-white/80 font-medium">الجودة</div>
+                    <div className="px-2 pt-1 text-xs text-white/80 font-bold mb-2">الجودة</div>
                     {video &&
                       video.qualities &&
                       [...video.qualities]
@@ -2356,14 +2518,14 @@ function VideoPlayer({ video = null }) {
                           <button
                             key={q.quality}
                             onClick={() => handleQualityChangePersist(q.quality)}
-                            className={`w-full text-right px-2 py-1 text-xs rounded ${String(q.quality) === String(currentQuality) ? "bg-gradient-to-r from-red-600 to-red-800 text-white font-semibold" : "text-white/80 hover:bg-white/5"}`}
+                            className={`w-full text-right px-3 py-2.5 text-sm rounded-lg transition-all duration-200 mb-1 ${String(q.quality) === String(currentQuality) ? "bg-gradient-to-r from-red-600 to-red-800 text-white font-bold" : "text-white/80 hover:bg-white/10 hover:text-white"}`}
                           >
                             {q.quality}p
                           </button>
                         ))}
-                    <div className="px-2 pt-2 text-xs text-white/80 flex items-center justify-between">
-                      <div className="text-xs">السرعة</div>
-                      <div className="font-semibold text-white text-xs">{playbackRate.toFixed(2)}x</div>
+                    <div className="px-2 pt-3 text-xs text-white/80 flex items-center justify-between mb-2">
+                      <div className="text-xs font-bold">السرعة</div>
+                      <div className="font-bold text-white text-sm">{playbackRate.toFixed(2)}x</div>
                     </div>
                     <div className="px-2 pb-2 pt-2">
                       <input
@@ -2377,23 +2539,25 @@ function VideoPlayer({ video = null }) {
                           setPlaybackRate(v);
                           showRateFeedback(v);
                         }}
-                        className="w-full accent-red-600"
+                        className="w-full accent-gradient"
                       />
                     </div>
-                    <div className="border-t border-white/5 mt-2 pt-2 px-2">
+                    <div className="border-t border-white/10 mt-2 pt-2 px-2">
                       <button
                         onClick={() => {
                           setSettingsMenuOpen(false);
                           handleDownload();
                         }}
                         disabled={isDownloading}
-                        className={`w-full text-center px-2 py-1 text-xs rounded ${(!isLoggedIn && !user?.isAdmin) ? 'opacity-50 cursor-not-allowed bg-transparent' : 'bg-gradient-to-r from-cyan-600 to-cyan-500 text-white'}`}
+                        className={`w-full text-center px-3 py-2.5 text-sm rounded-lg transition-all duration-200 ${(!isLoggedIn && !user?.isAdmin) ? 'opacity-50 cursor-not-allowed bg-transparent' : 'bg-gradient-to-r from-cyan-600 to-blue-500 text-white font-bold shadow-lg hover:shadow-cyan-500/25'}`}
                       >
-                        {isDownloading ? (downloadProgress != null ? `تحميل ${downloadProgress}%` : 'جاري التحميل...') : 'تحميل'}
+                        {isDownloading ? (downloadProgress != null ? `تحميل ${downloadProgress}%` : 'جاري التحميل...') : 'تحميل الفيديو'}
                       </button>
                     </div>
-                  </div>
-                )}
+                  </div>,
+                  // when player is in fullscreen render the menu inside the fullscreen element
+                  (isFullscreen && typeof document !== 'undefined' && document.fullscreenElement) ? document.fullscreenElement : document.body
+                ) : null)}
               </div>
 
               {/* زر التحميل */}
@@ -2401,27 +2565,23 @@ function VideoPlayer({ video = null }) {
                 <button
                   onClick={handleDownload}
                   disabled={isDownloading}
-                  className={`flex items-center gap-2 rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-2 py-1 shadow-lg border border-white/10 min-w-[36px] h-8 sm:min-w-[44px] sm:h-10 transition-transform focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 ${!isLoggedIn && !user?.isAdmin ? "opacity-50 cursor-not-allowed" : ""}`}
+                  className={`flex items-center gap-3 rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-4 py-3 shadow-2xl border border-white/10 transition-all duration-300 hover:scale-105 hover:shadow-cyan-500/25 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 backdrop-blur-sm ${!isLoggedIn && !user?.isAdmin ? "opacity-50 cursor-not-allowed" : ""}`}
                   aria-label="تحميل الفيديو"
                 >
                   {isDownloading ? (
                     <>
-                      <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24">
+                      <svg className="w-5 h-5 animate-spin" viewBox="0 0 24 24">
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
                       </svg>
-                      <span className="font-medium">
+                      <span className="font-bold tracking-wide">
                         {downloadProgress != null ? `تحميل ${downloadProgress}%` : "جاري التحميل..."}
                       </span>
                     </>
                   ) : (
                     <>
-                      <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
-                        <path d="M12 3V15" strokeLinecap="round" strokeLinejoin="round" />
-                        <path d="M8 11L12 15L16 11" strokeLinecap="round" strokeLinejoin="round" />
-                        <path d="M21 21H3" strokeLinecap="round" strokeLinejoin="round" />
-                      </svg>
-                      <span className="font-medium">تحميل</span>
+                      <Icons.Download />
+                      <span className="font-bold tracking-wide">تحميل</span>
                     </>
                   )}
                 </button>
@@ -2430,6 +2590,179 @@ function VideoPlayer({ video = null }) {
           </div>
         </div>
       </div>
+      
+      {/* إضافة الأنيميشن في الـCSS */}
+      <style>{`
+        @keyframes scale-in {
+          0% { transform: scale(0.8); opacity: 0; }
+          100% { transform: scale(1); opacity: 1; }
+        }
+        
+        @keyframes slide-in-left {
+          0% { transform: translateX(-20px) translateY(-50%); opacity: 0; }
+          100% { transform: translateX(0) translateY(-50%); opacity: 1; }
+        }
+        
+        @keyframes slide-in-right {
+          0% { transform: translateX(20px) translateY(-50%); opacity: 0; }
+          100% { transform: translateX(0) translateY(-50%); opacity: 1; }
+        }
+        
+        @keyframes slide-in-top {
+          0% { transform: translateX(-50%) translateY(-10px); opacity: 0; }
+          100% { transform: translateX(-50%) translateY(0); opacity: 1; }
+        }
+        
+        @keyframes fade-in {
+          0% { opacity: 0; }
+          100% { opacity: 1; }
+        }
+        
+        .animate-scale-in {
+          animation: scale-in 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        
+        .animate-slide-in-left {
+          animation: slide-in-left 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        
+        .animate-slide-in-right {
+          animation: slide-in-right 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        
+        .animate-slide-in-top {
+          animation: slide-in-top 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        
+        .animate-fade-in {
+          animation: fade-in 0.3s ease-out;
+        }
+        
+        .accent-gradient {
+          background: linear-gradient(to right, #ef4444, #3b82f6);
+          height: 6px;
+          border-radius: 3px;
+          outline: none;
+        }
+        
+        .accent-gradient::-webkit-slider-thumb {
+          appearance: none;
+          width: 18px;
+          height: 18px;
+          border-radius: 50%;
+          background: white;
+          border: 2px solid #3b82f6;
+          cursor: pointer;
+          box-shadow: 0 0 10px rgba(59, 130, 246, 0.5);
+        }
+        
+        .accent-gradient::-moz-range-thumb {
+          width: 18px;
+          height: 18px;
+          border-radius: 50%;
+          background: white;
+          border: 2px solid #3b82f6;
+          cursor: pointer;
+          box-shadow: 0 0 10px rgba(59, 130, 246, 0.5);
+        }
+        
+        .video-player {
+          filter: brightness(1.05);
+        }
+        
+        .video-player:fullscreen {
+          filter: brightness(1.1);
+        }
+
+        /* Volume slider: hidden until hover (desktop) */
+        .volume-container {
+          display: inline-flex;
+          align-items: center;
+        }
+
+        .volume-container .volume-slider {
+          width: 0;
+          opacity: 0;
+          transform: scaleX(0);
+          transition: all 180ms ease-in-out;
+          overflow: hidden;
+        }
+
+        .volume-container:hover .volume-slider,
+        .volume-slider:focus {
+          width: 80px;
+          opacity: 1;
+          transform: scaleX(1);
+        }
+
+        /* Responsive: shrink controls on small screens and make center icon slightly larger */
+        @media (max-width: 640px) {
+          /* make controls noticeably smaller on very small screens */
+          .controls-button {
+            width: 32px !important;
+            height: 32px !important;
+            padding: 0.12rem !important;
+            border-radius: 0.4rem !important;
+          }
+
+          /* shrink default svg icons inside control buttons */
+          .controls-button svg {
+            width: 12px !important;
+            height: 12px !important;
+          }
+
+          /* center control remains slightly larger than side buttons */
+          .center-control {
+            width: 40px !important;
+            height: 40px !important;
+          }
+
+          .center-control svg {
+            width: 22px !important;
+            height: 22px !important;
+          }
+
+          /* make the large center play icon a bit smaller on very small screens */
+          .center-control .w-10, .center-control .h-10, .center-control .w-12, .center-control .h-12 {
+            width: 20px !important;
+            height: 20px !important;
+          }
+
+          /* slightly reduce progress bar height for compact layout */
+          .relative.cursor-pointer.h-2.5 {
+            height: 6px !important;
+          }
+
+          /* volume slider hidden by default and expands on hover */
+          .volume-container .volume-slider {
+            width: 0 !important;
+            opacity: 0 !important;
+            transform: scaleX(0) !important;
+            transition: all 180ms ease-in-out !important;
+          }
+
+          .volume-container:hover .volume-slider, .volume-slider:focus {
+            width: 80px !important;
+            opacity: 1 !important;
+            transform: scaleX(1) !important;
+          }
+
+          /* larger settings icon so it doesn't crowd other icons */
+          .settings-button {
+            width: 44px !important;
+            height: 44px !important;
+          }
+
+          .settings-button svg {
+            width: 20px !important;
+            height: 20px !important;
+          }
+
+          .relative.cursor-pointer .-translate-y-1\/2 {
+            transform: translate(-50%, -50%) !important;
+          }
+        }
+      `}</style>
     </div>
   );
 }
