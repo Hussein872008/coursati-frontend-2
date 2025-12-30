@@ -314,6 +314,8 @@ export const adminAPI = {
   pauseValidateJob: (jobId) => api.post(`/api/admin/videos/validate-all/${jobId}/pause`),
   resumeValidateJob: (jobId) => api.post(`/api/admin/videos/validate-all/${jobId}/resume`),
   deleteValidateJob: (jobId) => api.delete(`/api/admin/videos/validate-all/${jobId}`),
+  stopValidateJob: (jobId) => api.post(`/api/admin/videos/validate-all/${jobId}/stop`),
+  listValidateJobs: () => api.get(`/api/admin/videos/validate-all/jobs`),
   revalidateJobVideo: (jobId, videoId) => api.post(`/api/admin/videos/validate-all/${jobId}/revalidate/${videoId}`),
   getAllVideos: () => api.get('/api/admin/videos'),
 };

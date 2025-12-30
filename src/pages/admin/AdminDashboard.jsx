@@ -97,10 +97,16 @@ const AdminDashboard = () => {
       }
     };
     loadValidationJob();
+    // also load list of recent jobs on mount
+    loadJobsList();
+    // refresh jobs list periodically while a validation job exists
+    const jobsInterval = setInterval(() => {
+      loadJobsList();
+    }, 5000);
     
     // Refresh validation job every 5 seconds
     const interval = setInterval(loadValidationJob, 5000);
-    return () => clearInterval(interval);
+    return () => { clearInterval(interval); clearInterval(jobsInterval); };
   }, []);
 
   // Refresh validation job data
@@ -206,6 +212,57 @@ const AdminDashboard = () => {
       },
       loading: false
     });
+  };
+
+  // List recent validation jobs
+  const [jobsList, setJobsList] = useState([]);
+  const [jobsLoading, setJobsLoading] = useState(false);
+  const loadJobsList = async () => {
+    try {
+      setJobsLoading(true);
+      const res = await adminAPI.listValidateJobs();
+      setJobsList(res.data?.jobs || []);
+    } catch (e) {
+      console.error('load jobs error', e);
+    } finally { setJobsLoading(false); }
+  };
+
+  const stopValidationJob = async (job) => {
+    if (!job?._id) return toast.error('معرّف المهمة غير متوفر');
+    setConfirmModal({ open: true, title: 'إيقاف عملية التحقق', message: 'هل تريد إيقاف هذه العملية فوراً؟', onConfirm: async () => {
+      try {
+        setConfirmModal(prev => ({ ...prev, loading: true }));
+        await adminAPI.stopValidateJob(job._id);
+        await loadJobsList();
+        await refreshValidationJob();
+        setConfirmModal({ open: false, title: '', message: '', onConfirm: null, loading: false });
+        toast.success('تم إيقاف المهمة');
+      } catch (e) {
+        toast.error('فشل إيقاف المهمة: ' + (e?.response?.data?.message || e.message));
+        setConfirmModal({ open: false, title: '', message: '', onConfirm: null, loading: false });
+      }
+    }, loading: false });
+  };
+
+  const downloadJob = async (job) => {
+    try {
+      const res = await adminAPI.getValidateJob(job.id || job._id);
+      const jobData = res.data?.job || res.data || null;
+      if (!jobData) return toast.error('لا توجد بيانات للمهمة');
+      const blob = new Blob([JSON.stringify(jobData, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const name = `validation-job-${job.id || job._id || Date.now()}.json`;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error('download job error', e);
+      toast.error('فشل تنزيل نتيجة المهمة');
+    }
   };
 
   useEffect(() => {
@@ -546,6 +603,63 @@ const AdminDashboard = () => {
               <div className="text-xs text-white/70 mt-3">حذف عملية التحقق القديمة وجميع بيانات النتائج</div>
             </div>
           </button>
+        )}
+      </div>
+
+      {/* Validation Jobs panel (improved UI) */}
+      <div className="bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl p-4 border border-slate-700">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-white font-semibold">عمليات التحقق</h3>
+          <div className="flex items-center gap-2">
+            <button onClick={loadJobsList} className="px-3 py-1 bg-slate-700 text-white rounded hover:bg-slate-600">تحديث</button>
+            <button onClick={refreshValidationJob} className="px-3 py-1 bg-slate-700 text-white rounded hover:bg-slate-600">أحدث</button>
+          </div>
+        </div>
+        <div className="text-sm text-slate-300 mb-3">المهمة الحالية: <span className="font-mono text-xs text-slate-200">{validationJob ? validationJob.id || validationJob._id : 'لا توجد'}</span></div>
+
+        {jobsLoading ? (
+          <div className="space-y-3">
+            {[1,2,3].map((i)=> (
+              <div key={i} className="p-3 bg-slate-800/60 rounded-lg animate-pulse">
+                <div className="h-4 bg-slate-700 rounded w-1/3 mb-2" />
+                <div className="h-3 bg-slate-700 rounded w-full" />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {(jobsList && jobsList.length > 0) ? jobsList.map((j) => {
+              const total = Number(j.totalVideos || 0);
+              const processed = Number(j.processedVideos || 0);
+              const pct = total > 0 ? Math.round((processed / total) * 100) : 0;
+              const statusColor = j.status === 'running' ? 'bg-amber-400 text-slate-900' : j.status === 'failed' ? 'bg-red-600 text-white' : j.status === 'stopped' ? 'bg-gray-500 text-white' : 'bg-emerald-500 text-white';
+              return (
+                <div key={j.id || j._id} className="p-3 bg-gradient-to-r from-slate-800/60 to-slate-800/40 rounded-lg border border-slate-700">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <div className="flex items-center gap-3">
+                        <div className={`px-2 py-0.5 rounded text-xs font-medium ${statusColor}`}>{j.status || 'unknown'}</div>
+                        <div className="text-sm text-slate-200 font-medium">{j.id || j._id}</div>
+                      </div>
+                      <div className="text-xs text-slate-400 mt-1">فيديوهات: {processed}/{total} — {pct}%</div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => stopValidationJob(j)} className="px-2 py-1 bg-red-600 text-white rounded text-xs">إيقاف</button>
+                      <button onClick={() => downloadJob(j)} className="px-2 py-1 bg-green-600 text-white rounded text-xs">تنزيل</button>
+                      <button onClick={() => setValidationJob(j)} className="px-2 py-1 bg-blue-600 text-white rounded text-xs">عرض</button>
+                    </div>
+                  </div>
+                  <div className="mt-3">
+                    <div className="w-full bg-slate-700 rounded h-2 overflow-hidden">
+                      <div style={{ width: `${Math.max(2, pct)}%` }} className={`h-2 ${pct < 50 ? 'bg-rose-500' : pct < 90 ? 'bg-amber-400' : 'bg-emerald-400'}`} />
+                    </div>
+                  </div>
+                </div>
+              );
+            }) : (
+              <div className="text-sm text-slate-400">لا توجد مهام</div>
+            )}
+          </div>
         )}
       </div>
 

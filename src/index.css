@@ -64,9 +64,35 @@ body {
   }
 }
 
+@keyframes scrollbar-glow {
+  0%, 100% {
+    box-shadow: 0 0 5px rgba(0, 255, 255, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 15px rgba(0, 255, 255, 0.6), 0 0 25px rgba(147, 51, 234, 0.4);
+  }
+}
+
+@keyframes gradient-shift {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
 .animate-float {
   /* float animation is decorative and costly; disable by default for performance */
   animation: none !important;
+}
+
+.animate-gradient-shift {
+  animation: gradient-shift 3s ease infinite;
+  background-size: 200% 200%;
 }
 
 /* Admin UI shared styles */
@@ -122,36 +148,314 @@ body {
   animation: none !important;
 }
 
-/* Viewer popover scroll area and custom scrollbar */
+/* --------------------------------------------------------------------------
+   Global site-wide scrollbar — Premium Design with Gradient & Animations
+   - Modern gradient design with smooth animations
+   - Visible enough but not intrusive
+   - Perfect for dark theme with accent colors
+---------------------------------------------------------------------------- */
+
+:root {
+  /* Premium gradient colors */
+  --scrollbar-primary-start: #06b6d4; /* Cyan-500 */
+  --scrollbar-primary-middle: #3b82f6; /* Blue-500 */
+  --scrollbar-primary-end: #8b5cf6; /* Violet-500 */
+  --scrollbar-secondary-start: #ec4899; /* Pink-500 */
+  --scrollbar-secondary-end: #f97316; /* Orange-500 */
+  
+  --scrollbar-track: rgba(15, 23, 42, 0.05); /* slate-900 with transparency */
+  --scrollbar-thumb-default: linear-gradient(
+    135deg,
+    var(--scrollbar-primary-start),
+    var(--scrollbar-primary-middle),
+    var(--scrollbar-primary-end)
+  );
+  --scrollbar-thumb-hover: linear-gradient(
+    135deg,
+    var(--scrollbar-primary-end),
+    var(--scrollbar-secondary-start),
+    var(--scrollbar-secondary-end)
+  );
+  --scrollbar-width: 10px;
+  --scrollbar-border-radius: 12px;
+}
+
+/* WebKit-based browsers (Chrome, Edge, Safari) */
+::-webkit-scrollbar {
+  width: var(--scrollbar-width);
+  height: var(--scrollbar-width);
+  background: transparent;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+  border-radius: var(--scrollbar-border-radius);
+  margin: 4px;
+  box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.1);
+}
+
+::-webkit-scrollbar-track:hover {
+  background: rgba(15, 23, 42, 0.1);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb-default);
+  border-radius: var(--scrollbar-border-radius);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  box-shadow: 
+    inset 0 0 10px rgba(255, 255, 255, 0.2),
+    0 2px 8px rgba(0, 0, 0, 0.2);
+  position: relative;
+  overflow: hidden;
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+  min-height: 40px;
+}
+
+/* Gradient animation for scrollbar thumb */
+::-webkit-scrollbar-thumb::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.1) 0%,
+    rgba(255, 255, 255, 0.2) 50%,
+    rgba(255, 255, 255, 0.1) 100%
+  );
+  border-radius: var(--scrollbar-border-radius);
+  animation: gradient-shift 3s ease infinite;
+}
+
+/* Hover effects */
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+  transform: scale(1.05);
+  animation: scrollbar-glow 2s ease-in-out infinite;
+  box-shadow: 
+    inset 0 0 15px rgba(255, 255, 255, 0.3),
+    0 4px 20px rgba(139, 92, 246, 0.4);
+}
+
+::-webkit-scrollbar-thumb:active {
+  transform: scale(1.08);
+  background: linear-gradient(
+    135deg,
+    var(--scrollbar-secondary-end),
+    var(--scrollbar-primary-start),
+    var(--scrollbar-primary-middle)
+  );
+  box-shadow: 
+    inset 0 0 20px rgba(255, 255, 255, 0.4),
+    0 6px 25px rgba(236, 72, 153, 0.5);
+}
+
+/* Corner styling */
+::-webkit-scrollbar-corner {
+  background: rgba(15, 23, 42, 0.1);
+  border-radius: 0 0 4px 0;
+}
+
+/* Firefox scrollbar styling */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-primary-start) var(--scrollbar-track);
+}
+
+/* Enhanced hover for Firefox */
+*:hover {
+  scrollbar-color: var(--scrollbar-primary-middle) var(--scrollbar-track);
+}
+
+/* Custom scrollbar for specific elements */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-primary-start) var(--scrollbar-track);
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.03);
+  border-radius: 8px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: linear-gradient(
+    135deg,
+    rgba(6, 182, 212, 0.8),
+    rgba(59, 130, 246, 0.8)
+  );
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(
+    135deg,
+    rgba(139, 92, 246, 0.9),
+    rgba(236, 72, 153, 0.9)
+  );
+}
+
+/* Viewer popover scroll area - Premium version */
 .viewer-scroll {
   max-height: 24rem; /* larger max height for long viewers lists */
   overflow-y: auto;
-  padding-right: 0.25rem; /* small safe gutter so content doesn't hide under scrollbar */
+  padding-right: 0.5rem; /* gutter for scrollbar */
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-primary-start) transparent;
 }
 
 .viewer-scroll::-webkit-scrollbar {
   width: 8px;
 }
+
 .viewer-scroll::-webkit-scrollbar-track {
   background: transparent;
-}
-.viewer-scroll::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.06);
-  border-radius: 9999px;
-  border: 2px solid transparent; /* creates a small padding effect */
-  background-clip: padding-box;
-}
-.viewer-scroll:hover::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
 }
 
-/* Firefox */
+.viewer-scroll::-webkit-scrollbar-thumb {
+  background: linear-gradient(
+    135deg,
+    rgba(6, 182, 212, 0.7),
+    rgba(139, 92, 246, 0.7)
+  );
+  border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background-clip: padding-box;
+  transition: all 0.3s ease;
+}
+
+.viewer-scroll::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(
+    135deg,
+    rgba(6, 182, 212, 0.9),
+    rgba(139, 92, 246, 0.9)
+  );
+  transform: scale(1.05);
+  box-shadow: 0 0 10px rgba(6, 182, 212, 0.4);
+}
+
+.viewer-scroll::-webkit-scrollbar-thumb:active {
+  background: linear-gradient(
+    135deg,
+    rgba(236, 72, 153, 0.9),
+    rgba(249, 115, 22, 0.9)
+  );
+}
+
+/* Firefox for viewer-scroll */
 .viewer-scroll {
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.08) transparent;
+  scrollbar-color: rgba(6, 182, 212, 0.7) transparent;
 }
 
 /* Small utility so inner items don't stick to edges */
 .viewer-scroll > * {
-  padding-right: 0.25rem;
+  padding-right: 0.5rem;
+}
+
+/* Mobile optimizations */
+@media (max-width: 768px) {
+  :root {
+    --scrollbar-width: 8px;
+    --scrollbar-border-radius: 10px;
+  }
+  
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  
+  ::-webkit-scrollbar-thumb {
+    min-height: 30px;
+  }
+  
+  .viewer-scroll::-webkit-scrollbar {
+    width: 6px;
+  }
+}
+
+/* Dark mode enhancements */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --scrollbar-track: rgba(30, 41, 59, 0.15);
+  }
+  
+  ::-webkit-scrollbar-track {
+    background: var(--scrollbar-track);
+    box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.3);
+  }
+  
+  ::-webkit-scrollbar-track:hover {
+    background: rgba(30, 41, 59, 0.25);
+  }
+  
+  ::-webkit-scrollbar-thumb {
+    box-shadow: 
+      inset 0 0 10px rgba(255, 255, 255, 0.1),
+      0 2px 8px rgba(0, 0, 0, 0.4);
+  }
+  
+  ::-webkit-scrollbar-thumb:hover {
+    box-shadow: 
+      inset 0 0 15px rgba(255, 255, 255, 0.2),
+      0 4px 20px rgba(139, 92, 246, 0.6);
+  }
+}
+
+/* Animation for scrollbar appearance */
+@supports (scrollbar-width: thin) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-primary-start) var(--scrollbar-track);
+    transition: scrollbar-color 0.3s ease;
+  }
+  
+  *:hover {
+    scrollbar-color: var(--scrollbar-primary-middle) var(--scrollbar-track);
+  }
+}
+
+/* Smooth scrolling for the entire page */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Highlight active scrollbar when scrolling */
+.scrolling::-webkit-scrollbar-thumb {
+  animation: scrollbar-glow 1.5s ease-in-out infinite;
+}
+
+/* Custom class for gradient scrollbars */
+.gradient-scrollbar::-webkit-scrollbar-thumb {
+  background: linear-gradient(
+    135deg,
+    var(--scrollbar-primary-start),
+    var(--scrollbar-primary-middle),
+    var(--scrollbar-primary-end),
+    var(--scrollbar-secondary-start),
+    var(--scrollbar-secondary-end)
+  );
+  background-size: 300% 300%;
+  animation: gradient-shift 4s ease infinite;
+}
+
+.gradient-scrollbar::-webkit-scrollbar-thumb:hover {
+  animation: 
+    gradient-shift 2s ease infinite,
+    scrollbar-glow 1.5s ease-in-out infinite;
+}
+
+/* For Firefox gradient effect */
+.gradient-scrollbar {
+  scrollbar-color: var(--scrollbar-primary-start) var(--scrollbar-track);
 }

@@ -25,9 +25,10 @@ const NotificationBell = () => {
       setNotifications(data);
 
       const newest = data.find((n) => !n.isRead);
-      if (newest && (!latestRef.current || newest._id !== latestRef.current)) {
+      const shownId = localStorage.getItem('latestNotifShown');
+      if (newest && newest._id && (!shownId || shownId !== newest._id)) {
         setToast(newest);
-        latestRef.current = newest._id;
+        localStorage.setItem('latestNotifShown', newest._id);
         setTimeout(() => setToast(null), 6000);
         try {
           showBrowserNotification(newest);
@@ -281,7 +282,7 @@ const NotificationBell = () => {
       )}
 
       {toast && (
-        <div className="fixed left-4 bottom-6 z-50 bg-gray-900/95 text-white rounded-lg p-3 shadow-lg flex gap-3 items-start">
+        <div onClick={() => { try { handleMarkRead(toast._id); goToLecture(toast); } catch(e){} }} className="fixed left-4 bottom-6 z-50 bg-gray-900/95 text-white rounded-lg p-3 shadow-lg flex gap-3 items-start cursor-pointer">
           <div className="w-12 h-12 rounded-md overflow-hidden bg-gray-700">
             {toast.thumbnailUrl ? (
               <img

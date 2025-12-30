@@ -4,10 +4,22 @@ import React, {
   useState,
   useCallback,
 } from "react";
+import PropTypes from 'prop-types';
 import api from "../utils/api";
 import { useAuth } from "../hooks/useAuth";
 
-function VideoPlayer({ video }) {
+function VideoPlayer({ video = null }) {
+  const DEBUG_LONGPRESS = false;
+  const dlog = (...args) => {
+    try { if (DEBUG_LONGPRESS) console.debug('[VP.longpress]', ...args); } catch (e) {}
+  };
+  
+  // long-press/jitter tuning
+  const CONTROLS_REVEAL_SUPPRESS_MS = 1000; // extend suppression after controls reveal
+  const JITTER_WINDOW_MS = 500; // window to count rapid pointerdown events
+  const JITTER_COUNT_THRESHOLD = 4; // number of pointerdowns in window considered jitter
+  const pointerDownTimesRef = useRef([]);
+  const lastJitterAtRef = useRef(0);
   const videoRef = useRef(null);
   const containerRef = useRef(null);
   const centerPlayRef = useRef(null);
@@ -23,10 +35,17 @@ function VideoPlayer({ video }) {
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [bufferedPercent, setBufferedPercent] = useState(0);
+  const pointerLongSuppressClickRef = useRef(false);
+  const ignoreToggleRef = useRef(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [showErrorOverlay, setShowErrorOverlay] = useState(false);
   const errorTimerRef = useRef(null);
+  const errorSetDelayRef = useRef(null);
+  // collect transient feedback timers so we can clear them on unmount
+  const feedbackTimersRef = useRef(new Set());
+  const spaceLongPressTimerRef = useRef(null);
+  const pointerLongPressTimerRef = useRef(null);
   const [qualityMenuOpen, setQualityMenuOpen] = useState(false);
   const [speedMenuOpen, setSpeedMenuOpen] = useState(false);
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
@@ -44,6 +63,13 @@ function VideoPlayer({ video }) {
     }
   });
 
+  // refs that must be top-level (do not call hooks inside state initializers)
+  const _initialVolumeRef = useRef(true);
+  const prevPlaybackRateRef = useRef(null);
+  const longHoldCountRef = useRef(0);
+  const spaceLongActiveRef = useRef(false);
+  const pointerLongActiveRef = useRef(false);
+
   const [playbackRate, setPlaybackRate] = useState(() => {
     try {
       const saved = localStorage.getItem("video-rate");
@@ -52,6 +78,12 @@ function VideoPlayer({ video }) {
       return 1.0;
     }
   });
+  const [isLongPressActive, setIsLongPressActive] = useState(false);
+  const [isPendingLongPress, setIsPendingLongPress] = useState(false);
+  const controlsRevealedAtRef = useRef(0);
+  const showControlsRef = useRef(showControls);
+
+  useEffect(() => { showControlsRef.current = showControls; }, [showControls]);
 
   const [actionFeedback, setActionFeedback] = useState({
     visible: false,
@@ -89,6 +121,36 @@ function VideoPlayer({ video }) {
 
   const { user, isLoggedIn } = useAuth();
 
+  // متغيرات جديدة للتحكم بالتفاعل
+  const isTouchDevice = useCallback(() => {
+    return ('ontouchstart' in window) || 
+           (navigator.maxTouchPoints > 0) ||
+           (navigator.msMaxTouchPoints > 0);
+  }, []);
+  
+  const isTouchInput = useRef(isTouchDevice());
+  const pointerTypeRef = useRef(null);
+  
+  const [interactionState, setInteractionState] = useState({
+    controlsVisible: true,
+    lastInteractionTime: Date.now(),
+    isTouchInteraction: false,
+    isMouseInteraction: false,
+    pendingTap: false
+  });
+  
+  const [longPressState, setLongPressState] = useState({
+    active: false,
+    position: null,
+    type: null
+  });
+  
+  // توقيتات ثابتة
+  const MOBILE_HIDE_TIMEOUT = 3000;
+  const DESKTOP_HIDE_TIMEOUT = 2000;
+  const MOBILE_TAP_TIMEOUT = 300;
+  const LONG_PRESS_THRESHOLD = 500;
+  
   // دقة الفيديو المتاحة
   const RES_MAP = {
     "144": { w: 256, h: 144 },
@@ -102,16 +164,23 @@ function VideoPlayer({ video }) {
   };
 
   // وظائف مساعدة للتحكم في إخفاء عناصر التحكم
-  const scheduleHideControls = useCallback((delay = 3000) => {
+  const scheduleHideControls = useCallback((delay) => {
     if (hideControlsTimeoutRef.current) {
       clearTimeout(hideControlsTimeoutRef.current);
     }
+    
+    // لا نخفي أثناء الضغطة الطويلة أو فتح القوائم
+    if (longPressState.active || spaceLongActiveRef.current) return;
+    if (qualityOpenRef.current || speedOpenRef.current || settingsOpenRef.current) return;
+    
+    const hideDelay = delay || (isTouchInput.current ? MOBILE_HIDE_TIMEOUT : DESKTOP_HIDE_TIMEOUT);
+    
     hideControlsTimeoutRef.current = setTimeout(() => {
       if (!qualityOpenRef.current && !speedOpenRef.current && !settingsOpenRef.current) {
         setShowControls(false);
       }
-    }, delay);
-  }, []);
+    }, hideDelay);
+  }, [longPressState.active]);
 
   const clearHideControls = useCallback(() => {
     if (hideControlsTimeoutRef.current) {
@@ -120,21 +189,56 @@ function VideoPlayer({ video }) {
     }
   }, []);
 
+  // إظهار التحكم مع الخيارات
+  const showControlsWithOptions = useCallback((options = {}) => {
+    const { immediate = true, extendTimeout = true } = options;
+    
+    setInteractionState(prev => ({
+      ...prev,
+      controlsVisible: true,
+      lastInteractionTime: Date.now()
+    }));
+    
+    if (immediate) {
+      setShowControls(true);
+    }
+    
+    if (extendTimeout) {
+      clearHideControls();
+      scheduleHideControls();
+    }
+  }, [clearHideControls, scheduleHideControls]);
+
+  // إخفاء التحكم
+  const hideControlsSafe = useCallback(() => {
+    if (qualityMenuOpen || speedMenuOpen || settingsMenuOpen) return;
+    if (longPressState.active || spaceLongActiveRef.current) return;
+    
+    setShowControls(false);
+    setInteractionState(prev => ({
+      ...prev,
+      controlsVisible: false
+    }));
+  }, [qualityMenuOpen, speedMenuOpen, settingsMenuOpen, longPressState.active]);
+
   // عرض ردود الفعل المرئية
   const showActionFeedback = useCallback((icon, text, timeout = 800) => {
     setActionFeedback({ visible: true, icon, text, position: 'center' });
-    setTimeout(
-      () => setActionFeedback({ visible: false, icon: null, text: "", position: 'center' }),
-      timeout,
-    );
+    const t = setTimeout(() => {
+      setActionFeedback({ visible: false, icon: null, text: "", position: 'center' });
+      try { feedbackTimersRef.current.delete(t); } catch (e) {}
+    }, timeout);
+    try { feedbackTimersRef.current.add(t); } catch (e) {}
   }, []);
 
   const showSeekFeedback = useCallback((type) => {
     const time = type === "forward" ? "+5s" : "-5s";
     setSeekFeedback({ visible: true, type, time });
-    setTimeout(() => {
+    const t = setTimeout(() => {
       setSeekFeedback({ visible: false, type: "", time: "" });
+      try { feedbackTimersRef.current.delete(t); } catch (e) {}
     }, 800);
+    try { feedbackTimersRef.current.add(t); } catch (e) {}
   }, []);
 
   // enhanced action feedback that supports positioning: 'center' | 'left' | 'right'
@@ -146,22 +250,93 @@ function VideoPlayer({ video }) {
     );
   }, []);
 
+  const startDoubleSpeed = useCallback(() => {
+    try {
+      longHoldCountRef.current = (longHoldCountRef.current || 0) + 1;
+      if (longHoldCountRef.current === 1) {
+        prevPlaybackRateRef.current = playbackRate;
+        const next = 2.0;
+        try { dlog('startDoubleSpeed', { from: playbackRate, to: next }); } catch (e) {}
+        setPlaybackRate(next);
+        setActionFeedback({ visible: true, icon: Icons.Speed, text: `${next.toFixed(2)}x`, position: 'top' });
+        // prevent accidental toggles immediately after long-press
+        try { ignoreToggleRef.current = true; } catch (e) {}
+        try { setIsLongPressActive(true); } catch (e) {}
+      }
+    } catch (e) {}
+  }, [playbackRate]);
+
+  const stopDoubleSpeed = useCallback(() => {
+    try {
+      longHoldCountRef.current = Math.max(0, (longHoldCountRef.current || 0) - 1);
+      if (longHoldCountRef.current === 0) {
+        const prev = prevPlaybackRateRef.current;
+        if (typeof prev === 'number') {
+          try { dlog('stopDoubleSpeed', { restoreTo: prev }); } catch (e) {}
+          setPlaybackRate(prev);
+        }
+        prevPlaybackRateRef.current = null;
+        setActionFeedback({ visible: false, icon: null, text: '', position: 'center' });
+        try { scheduleHideControls(1000); } catch (e) {}
+        try { setIsLongPressActive(false); } catch (e) {}
+      }
+    } catch (e) {}
+  }, []);
+
   const showRateFeedback = useCallback((rate) => {
     setRateFeedback({ visible: true, rate });
-    setTimeout(() => {
+    const t = setTimeout(() => {
       setRateFeedback({ visible: false, rate: 1 });
+      try { feedbackTimersRef.current.delete(t); } catch (e) {}
     }, 1000);
+    try { feedbackTimersRef.current.add(t); } catch (e) {}
   }, []);
 
   const showVolumeFeedback = useCallback((vol, timeout = 800) => {
     try {
       const pct = Math.round((vol || 0) * 100);
       setVolumeFeedback({ visible: true, volume: pct });
-      setTimeout(() => setVolumeFeedback({ visible: false, volume: 0 }), timeout);
+      const t = setTimeout(() => setVolumeFeedback({ visible: false, volume: 0 }), timeout);
+      try { feedbackTimersRef.current.add(t); } catch (e) {}
     } catch (e) {}
   }, []);
 
-  const _initialVolumeRef = useRef(true);
+  const handleVolumeWheel = useCallback((e) => {
+    try {
+      e.preventDefault();
+      const delta = e.deltaY || 0;
+      const step = 0.02;
+      const next = Math.round(Math.min(1, Math.max(0, volume + (delta < 0 ? step : -step))) * 100) / 100;
+      if (next > 0) prevVolumeRef.current = next;
+      setVolume(next);
+      showVolumeFeedback(next);
+      // keep controls visible when adjusting with wheel
+      showControlsWithOptions();
+    } catch (err) {
+      // ignore
+    }
+  }, [volume, showVolumeFeedback, showControlsWithOptions]);
+
+  // Prevent page scrolling when interacting with the volume control on desktop
+  const preventScrollHandler = useCallback((ev) => {
+    try { ev.preventDefault(); } catch (e) {}
+  }, []);
+
+  const disablePageScrollWhileInteracting = useCallback(() => {
+    try {
+      if (isTouchInput.current) return; // don't block on touch devices
+      document.addEventListener('wheel', preventScrollHandler, { passive: false });
+      document.addEventListener('touchmove', preventScrollHandler, { passive: false });
+    } catch (e) {}
+  }, [preventScrollHandler]);
+
+  const enablePageScrollAfterInteracting = useCallback(() => {
+    try {
+      document.removeEventListener('wheel', preventScrollHandler, { passive: false });
+      document.removeEventListener('touchmove', preventScrollHandler, { passive: false });
+    } catch (e) {}
+  }, [preventScrollHandler]);
+
   useEffect(() => {
     if (_initialVolumeRef.current) {
       _initialVolumeRef.current = false;
@@ -186,6 +361,17 @@ function VideoPlayer({ video }) {
       if (playPromise && typeof playPromise.then === "function") {
         playPromise.then(() => {
           setIsPlaying(true);
+          // clear any transient error state when play succeeds
+          try { setError(null); } catch (e) {}
+          try { setShowErrorOverlay(false); } catch (e) {}
+          if (errorTimerRef.current) {
+            try { clearTimeout(errorTimerRef.current); } catch (e) {}
+            errorTimerRef.current = null;
+          }
+          if (errorSetDelayRef.current) {
+            try { clearTimeout(errorSetDelayRef.current); } catch (e) {}
+            errorSetDelayRef.current = null;
+          }
         }).catch((err) => {
           if (err && err.name === "AbortError") return;
           console.warn("Playback error:", err);
@@ -201,6 +387,23 @@ function VideoPlayer({ video }) {
   // التبديل بين التشغيل والإيقاف
   const togglePlayPause = useCallback(() => {
     try {
+      // ignore toggle when recently triggered by a long-press or when controls were just revealed
+      try {
+        dlog('togglePlayPause called, ignoreToggle=', ignoreToggleRef.current);
+        const now = Date.now();
+        if (controlsRevealedAtRef.current && (now - controlsRevealedAtRef.current) < CONTROLS_REVEAL_SUPPRESS_MS) {
+          dlog('togglePlayPause suppressed: controls were just revealed', { age: now - controlsRevealedAtRef.current });
+          // consume the reveal timestamp to avoid double-suppress
+          controlsRevealedAtRef.current = 0;
+          return;
+        }
+        if (ignoreToggleRef.current) {
+          // consume the flag and do nothing
+          ignoreToggleRef.current = false;
+          dlog('togglePlayPause suppressed by ignoreToggle');
+          return;
+        }
+      } catch (e) {}
       const v = videoRef.current;
       if (!v) return;
       if (v.paused) {
@@ -213,6 +416,24 @@ function VideoPlayer({ video }) {
       scheduleHideControls(3000);
     } catch (e) {
       console.warn("Toggle play/pause error:", e);
+    }
+  }, [safePlay, scheduleHideControls]);
+
+  // immediate toggle that bypasses the reveal/suppression heuristics
+  const togglePlayPauseImmediate = useCallback(() => {
+    try {
+      const v = videoRef.current;
+      if (!v) return;
+      if (v.paused) {
+        safePlay();
+      } else {
+        v.pause();
+        setIsPlaying(false);
+      }
+      setShowControls(true);
+      scheduleHideControls(3000);
+    } catch (e) {
+      console.warn('Immediate toggle error:', e);
     }
   }, [safePlay, scheduleHideControls]);
 
@@ -349,7 +570,8 @@ function VideoPlayer({ video }) {
     progressDragStartTimeRef.current = videoRef.current.currentTime || 0;
     window.addEventListener("pointermove", handlePointerSeekMove);
     window.addEventListener("pointerup", handlePointerSeekEnd);
-  }, [duration]);
+    showControlsWithOptions();
+  }, [duration, showControlsWithOptions]);
 
   // حركة السحب على شريط التقدم
   const handlePointerSeekMove = useCallback((e) => {
@@ -503,18 +725,20 @@ function VideoPlayer({ video }) {
     } catch (e) {
       console.warn('Apply quality error:', e);
     }
-  }, [video, applyQualityToHls]);
+  }, [video, applyQualityToHls, safePlay]);
 
   // التعديل على سرعة التشغيل
   const adjustRate = useCallback((delta) => {
     try {
       const v = Math.round(Math.max(0.25, Math.min(3, playbackRate + delta)) * 100) / 100;
       setPlaybackRate(v);
-      showRateFeedback(v);
+      // show action feedback (positioned at top half) when rate changed from controls
+      try { showActionFeedbackPos(Icons.Speed, `${v.toFixed(2)}x`, 800, 'top'); } catch (e) { showRateFeedback(v); }
+      showControlsWithOptions();
     } catch (e) {
       console.warn("Adjust rate error:", e);
     }
-  }, [playbackRate, showRateFeedback]);
+  }, [playbackRate, showRateFeedback, showControlsWithOptions]);
 
   // تحميل الفيديو
   const handleDownload = useCallback(async () => {
@@ -569,7 +793,8 @@ function VideoPlayer({ video }) {
       a.download = filename;
       document.body.appendChild(a);
       a.click();
-      a.remove();
+          // allow toggles after a short grace period
+          try { setTimeout(() => { ignoreToggleRef.current = false; }, 600); } catch (e) {}
       setTimeout(() => window.URL.revokeObjectURL(url), 10000);
 
       showActionFeedback(Icons.PlayArrow, "تم التحميل");
@@ -582,6 +807,41 @@ function VideoPlayer({ video }) {
       setTimeout(() => setDownloadProgress(null), 800);
     }
   }, [video, currentQuality, user, isDownloading, showActionFeedback]);
+
+  // بدء الضغطة الطويلة
+  const startLongPress = useCallback((type, position) => {
+    if (type === 'pointer' && isTouchInput.current) {
+      setLongPressState({
+        active: true,
+        position,
+        type
+      });
+      
+      pointerLongSuppressClickRef.current = true;
+      startDoubleSpeed();
+      showControlsWithOptions({ immediate: true, extendTimeout: false });
+      setIsLongPressActive(true);
+    }
+  }, [startDoubleSpeed, showControlsWithOptions]);
+
+  // إيقاف الضغطة الطويلة
+  const stopLongPress = useCallback(() => {
+    if (longPressState.active) {
+      setLongPressState({
+        active: false,
+        position: null,
+        type: null
+      });
+      
+      setTimeout(() => {
+        pointerLongSuppressClickRef.current = false;
+      }, 500);
+      
+      stopDoubleSpeed();
+      scheduleHideControls(1000);
+      setIsLongPressActive(false);
+    }
+  }, [longPressState.active, stopDoubleSpeed, scheduleHideControls]);
 
   // تهيئة الفيديو و HLS
   useEffect(() => {
@@ -652,11 +912,22 @@ function VideoPlayer({ video }) {
           });
 
           hlsRef.current = hls;
+          // simple retry counter for transient playlist parsing/network errors
+          let hlsRetryAttempts = 0;
 
-          hls.on(HlsModule.Events.MANIFEST_PARSED, () => {
-            // clear any previous transient error and mark ready
-            setError(null);
-            setLoading(false);
+            hls.on(HlsModule.Events.MANIFEST_PARSED, () => {
+              // clear any previous transient error and mark ready
+              setError(null);
+              setShowErrorOverlay(false);
+              setLoading(false);
+              if (errorTimerRef.current) {
+                try { clearTimeout(errorTimerRef.current); } catch (e) {}
+                errorTimerRef.current = null;
+              }
+              if (errorSetDelayRef.current) {
+                try { clearTimeout(errorSetDelayRef.current); } catch (e) {}
+                errorSetDelayRef.current = null;
+              }
             // Apply saved/default quality once manifest (levels) are available
             try {
               if (defaultQuality) applyQualityToHls(hls, defaultQuality);
@@ -666,6 +937,15 @@ function VideoPlayer({ video }) {
               if (videoRef.current) {
                 onPlaying = () => {
                   setError(null);
+                  setShowErrorOverlay(false);
+                  if (errorTimerRef.current) {
+                    try { clearTimeout(errorTimerRef.current); } catch (e) {}
+                    errorTimerRef.current = null;
+                  }
+                  if (errorSetDelayRef.current) {
+                    try { clearTimeout(errorSetDelayRef.current); } catch (e) {}
+                    errorSetDelayRef.current = null;
+                  }
                   setLoading(false);
                   setIsPlaying(true);
                 };
@@ -676,19 +956,49 @@ function VideoPlayer({ video }) {
 
           hls.on(HlsModule.Events.ERROR, (event, data) => {
             console.warn("HLS error:", data);
+            // If we received a fatal parsing/network error for the playlist, try one quick retry
+            try {
+              const details = data && (data.details || data.type || '');
+              const isLevelParsing = details && String(details).toLowerCase().includes('levelparsing');
+              if (data && data.fatal && isLevelParsing && hlsRetryAttempts < 1) {
+                hlsRetryAttempts += 1;
+                console.debug && console.debug('HLS: levelParsingError detected — retrying loadSource (attempt)', hlsRetryAttempts);
+                setTimeout(() => {
+                  try {
+                    hls.loadSource(playlistUrl);
+                    // restart loading
+                    try { hls.startLoad(); } catch (e) {}
+                  } catch (e) {
+                    console.warn('HLS retry failed:', e);
+                  }
+                }, 600);
+                return;
+              }
+            } catch (e) {}
+
             if (data.fatal) {
+              let msg = "خطأ غير معروف";
               switch (data.type) {
                 case HlsModule.ErrorTypes.NETWORK_ERROR:
-                  setError("خطأ في الشبكة");
+                  msg = "خطأ في الشبكة";
                   break;
                 case HlsModule.ErrorTypes.MEDIA_ERROR:
-                  setError("خطأ في الوسائط");
+                  msg = "خطأ في الوسائط";
                   break;
                 default:
-                  setError("خطأ غير معروف");
+                  msg = "خطأ غير معروف";
                   break;
               }
-              setLoading(false);
+              // debounce setting the visible error state to avoid brief transient
+              if (errorSetDelayRef.current) {
+                try { clearTimeout(errorSetDelayRef.current); } catch (e) {}
+                errorSetDelayRef.current = null;
+              }
+              errorSetDelayRef.current = setTimeout(() => {
+                setError(msg);
+                setLoading(false);
+                errorSetDelayRef.current = null;
+              }, 700);
             }
           });
 
@@ -718,8 +1028,15 @@ function VideoPlayer({ video }) {
               v.addEventListener('playing', onPlaying);
             } catch (e) {}
             v.addEventListener("error", () => {
-              setError("فشل التشغيل");
-              setLoading(false);
+              if (errorSetDelayRef.current) {
+                try { clearTimeout(errorSetDelayRef.current); } catch (e) {}
+                errorSetDelayRef.current = null;
+              }
+              errorSetDelayRef.current = setTimeout(() => {
+                setError("فشل التشغيل");
+                setLoading(false);
+                errorSetDelayRef.current = null;
+              }, 700);
             });
           } else {
             setLoading(false);
@@ -829,25 +1146,236 @@ function VideoPlayer({ video }) {
       clearHideControls();
       videoRef.current?.removeEventListener("timeupdate", updateTime);
     };
-  }, [video, shouldInit, safePlay, clearHideControls, scheduleHideControls]);
+  }, [video, shouldInit, safePlay, clearHideControls, scheduleHideControls, applyQualityToHls]);
+
+  // معالجة أحداث pointer للتفاعلات
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    
+    let longPressTimer = null;
+    let tapTimer = null;
+    
+    const handlePointerDown = (e) => {
+      pointerTypeRef.current = e.pointerType;
+      
+      if (e.pointerType === 'touch') {
+        // إعداد للجوال
+        setInteractionState(prev => ({
+          ...prev,
+          isTouchInteraction: true,
+          isMouseInteraction: false,
+          pendingTap: true
+        }));
+        
+        // don't start long-press if the touch began on a control button
+        try {
+          if (!e.target || !e.target.closest || e.target.closest('.controls-button')) {
+            // allow taps on controls to proceed immediately; no long-press timer
+            longPressTimer = null;
+          } else {
+            // بدء مؤقت الضغطة الطويلة
+            longPressTimer = setTimeout(() => {
+              startLongPress('pointer', { x: e.clientX, y: e.clientY });
+            }, LONG_PRESS_THRESHOLD);
+          }
+        } catch (err) {
+          longPressTimer = setTimeout(() => {
+            startLongPress('pointer', { x: e.clientX, y: e.clientY });
+          }, LONG_PRESS_THRESHOLD);
+        }
+        
+        // مؤقت النقر القصير
+        tapTimer = setTimeout(() => {
+          setInteractionState(prev => ({
+            ...prev,
+            pendingTap: false
+          }));
+        }, MOBILE_TAP_TIMEOUT);
+        
+      } else if (e.pointerType === 'mouse') {
+        // إعداد لسطح المكتب
+        setInteractionState(prev => ({
+          ...prev,
+          isMouseInteraction: true,
+          isTouchInteraction: false,
+          pendingTap: false
+        }));
+      }
+      
+      showControlsWithOptions({ immediate: true });
+    };
+    
+    const handlePointerMove = (e) => {
+      if (e.pointerType === 'mouse') {
+        // حركة الفأرة تظهر التحكم على سطح المكتب
+        showControlsWithOptions({ immediate: true });
+      }
+    };
+    
+    const handlePointerUp = (e) => {
+      // إلغاء المؤقتات
+      if (longPressTimer) clearTimeout(longPressTimer);
+      if (tapTimer) clearTimeout(tapTimer);
+      
+      if (longPressState.active) {
+        // إيقاف الضغطة الطويلة النشطة
+        e.preventDefault();
+        e.stopPropagation();
+        stopLongPress();
+      } else if (e.pointerType === 'touch' && interactionState.pendingTap) {
+        // نقر عادي على الجوال
+        try {
+          // If the tap targeted a control button, allow its click handler to run immediately
+          const btn = e.target && e.target.closest && e.target.closest('.controls-button');
+          if (btn) {
+            // ensure controls visible and don't intercept the click
+            setShowControls(true);
+            scheduleHideControls(MOBILE_HIDE_TIMEOUT);
+            setInteractionState(prev => ({ ...prev, pendingTap: false }));
+            return;
+          }
+
+          // If controls are hidden and the tap is within the center play area, trigger immediate play
+          if (!showControls) {
+            try {
+              if (centerPlayRef.current) {
+                const r = centerPlayRef.current.getBoundingClientRect();
+                const PAD = Math.min(40, Math.max(12, Math.round(Math.min(r.width, r.height) * 0.25)));
+                const left = r.left - PAD;
+                const right = r.right + PAD;
+                const top = r.top - PAD;
+                const bottom = r.bottom + PAD;
+                if (e.clientX >= left && e.clientX <= right && e.clientY >= top && e.clientY <= bottom) {
+                  try { e.preventDefault(); e.stopPropagation(); } catch (ee) {}
+                  togglePlayPauseImmediate();
+                  setShowControls(true);
+                  scheduleHideControls(MOBILE_HIDE_TIMEOUT);
+                  setInteractionState(prev => ({ ...prev, pendingTap: false }));
+                  return;
+                }
+              }
+            } catch (e) {}
+          }
+
+          // default: reveal or hide controls (don't block propagation for controls)
+          try { e.preventDefault(); e.stopPropagation(); } catch (ee) {}
+          setShowControls(prev => {
+            const next = !prev;
+            if (next) {
+              scheduleHideControls(MOBILE_HIDE_TIMEOUT);
+            }
+            return next;
+          });
+        } catch (err) {}
+      } else if (e.pointerType === 'mouse') {
+        // على سطح المكتب لا نبدّل التشغيل عند النقر في منطقة فارغة
+        // تفاعل أزرار التشغيل يتم عبر أزرار بعلامة `controls-button` وتستجيب فورًا
+      }
+      
+      setInteractionState(prev => ({
+        ...prev,
+        pendingTap: false
+      }));
+    };
+    
+    const handleDoubleClick = (e) => {
+      if (pointerTypeRef.current === 'mouse') {
+        // ignore double-clicks that target controls
+        if (e.target && e.target.closest && e.target.closest('.controls-button')) return;
+        // otherwise only toggle fullscreen when dblclicking the video/container area
+        if (e.target === videoRef.current || e.target === container) {
+          e.preventDefault();
+          toggleFullscreen();
+        }
+      }
+    };
+    
+    container.addEventListener('pointerdown', handlePointerDown, { passive: true });
+    container.addEventListener('pointermove', handlePointerMove, { passive: true });
+    container.addEventListener('pointerup', handlePointerUp, { passive: false });
+    container.addEventListener('dblclick', handleDoubleClick);
+    
+    return () => {
+      container.removeEventListener('pointerdown', handlePointerDown);
+      container.removeEventListener('pointermove', handlePointerMove);
+      container.removeEventListener('pointerup', handlePointerUp);
+      container.removeEventListener('dblclick', handleDoubleClick);
+      
+      if (longPressTimer) clearTimeout(longPressTimer);
+      if (tapTimer) clearTimeout(tapTimer);
+    };
+  }, [
+    interactionState.pendingTap,
+    longPressState.active,
+    togglePlayPause,
+    toggleFullscreen,
+    showControlsWithOptions,
+    startLongPress,
+    stopLongPress,
+    scheduleHideControls
+  ]);
+  
+  // إدارة الضغطة الطويلة بمسطرة المسافة
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.code === 'Space') {
+        e.preventDefault();
+        
+        if (isTouchInput.current) return;
+        
+        if (e.repeat) {
+          // الضغطة الطويلة على سطح المكتب
+          if (!spaceLongActiveRef.current) {
+            spaceLongActiveRef.current = true;
+            startDoubleSpeed();
+            showControlsWithOptions({ immediate: true, extendTimeout: false });
+          }
+        } else {
+          // النقر القصير
+          togglePlayPause();
+        }
+      }
+    };
+    
+    const handleKeyUp = (e) => {
+      if (e.code === 'Space' && spaceLongActiveRef.current) {
+        spaceLongActiveRef.current = false;
+        stopDoubleSpeed();
+        scheduleHideControls(1000);
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
+  }, [togglePlayPause, startDoubleSpeed, stopDoubleSpeed, showControlsWithOptions, scheduleHideControls]);
 
   // التحكم في إظهار/إخفاء عناصر التحكم
   useEffect(() => {
     if (showControls) {
-      scheduleHideControls(3000);
+      scheduleHideControls();
     } else {
       clearHideControls();
     }
     return () => clearHideControls();
   }, [showControls, qualityMenuOpen, speedMenuOpen, settingsMenuOpen, scheduleHideControls, clearHideControls]);
 
-  // Delay showing error overlay to avoid brief transient flashes on click
+  // Delay showing error overlay — only show if still not playing after debounce
   useEffect(() => {
     if (error) {
-      // reset overlay visibility then show after short delay
+      // reset overlay visibility then show after longer delay only if not playing
       setShowErrorOverlay(false);
       if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
-      errorTimerRef.current = setTimeout(() => setShowErrorOverlay(true), 350);
+      errorTimerRef.current = setTimeout(() => {
+        try {
+          if (!isPlaying && error) setShowErrorOverlay(true);
+        } catch (e) {}
+      }, 1200);
     } else {
       if (errorTimerRef.current) {
         clearTimeout(errorTimerRef.current);
@@ -861,7 +1389,17 @@ function VideoPlayer({ video }) {
         errorTimerRef.current = null;
       }
     };
-  }, [error]);
+  }, [error, isPlaying]);
+
+  // clear any pending debounced error timer on unmount
+  useEffect(() => {
+    return () => {
+      if (errorSetDelayRef.current) {
+        try { clearTimeout(errorSetDelayRef.current); } catch (e) {}
+        errorSetDelayRef.current = null;
+      }
+    };
+  }, []);
 
   // compute an estimated bottom inset for fullscreen on mobile
   useEffect(() => {
@@ -936,20 +1474,16 @@ function VideoPlayer({ video }) {
     }
   }, [playbackRate]);
 
-  // اختصارات لوحة المفاتيح
+  // معالجة اختصارات لوحة المفاتيح الإضافية
   useEffect(() => {
     const onKey = (e) => {
       if (!videoRef.current) return;
       const v = videoRef.current;
       
+      // معالجة مسطرة المسافة تمت في useEffect منفصل
+      if (e.code === 'Space') return;
+      
       switch (e.code) {
-        case "Space":
-          e.preventDefault();
-          // predict the resulting state so feedback is immediate
-          const willPlay = videoRef.current ? (videoRef.current.paused || false) : !isPlaying;
-          togglePlayPause();
-          // suppress center action feedback for play/pause since center button already shows state
-          break;
         case "ArrowRight":
           e.preventDefault();
           v.currentTime = Math.min(v.duration || 0, v.currentTime + 5);
@@ -1001,7 +1535,7 @@ function VideoPlayer({ video }) {
     };
 
     window.addEventListener("keydown", onKey);
-
+    
     // استجابة لتغيير وضع ملء الشاشة
     const handleFullscreenChange = () => {
       const isFs = !!document.fullscreenElement;
@@ -1051,7 +1585,27 @@ function VideoPlayer({ video }) {
       window.removeEventListener("keydown", onKey);
       document.removeEventListener("fullscreenchange", handleFullscreenChange);
     };
-  }, [video, togglePlayPause, toggleFullscreen, safePlay, scheduleHideControls, showActionFeedback]);
+  }, [video, togglePlayPause, toggleFullscreen, safePlay, scheduleHideControls, showActionFeedbackPos, clearHideControls, updateVideoSizing]);
+
+  // cleanup any transient feedback timers on unmount
+  useEffect(() => {
+    return () => {
+      try {
+        feedbackTimersRef.current.forEach((t) => clearTimeout(t));
+        feedbackTimersRef.current.clear();
+      } catch (e) {}
+    };
+  }, []);
+
+  // keep controls visible while a long-press is active
+  useEffect(() => {
+    try {
+      if (isLongPressActive || longPressState.active || spaceLongActiveRef.current) {
+        setShowControls(true);
+        clearHideControls();
+      }
+    } catch (e) {}
+  }, [isLongPressActive, longPressState.active, clearHideControls]);
 
   // مزامنة حالة التشغيل
   useEffect(() => {
@@ -1233,24 +1787,31 @@ function VideoPlayer({ video }) {
     <div className="space-y-2 relative">
       <div
         className={`relative w-full bg-gradient-to-br from-gray-900 to-black rounded-xl 
-          ${isFullscreen ? "fixed inset-0 z-50 rounded-none overflow-visible" : "aspect-video max-h-[70vh] shadow-lg overflow-hidden"}`}
+          ${isFullscreen ? "fixed inset-0 z-50 rounded-none overflow-visible" : "aspect-video max-h-[70vh] shadow-lg overflow-hidden"} ${showControls ? "" : "cursor-none"}`}
         ref={containerRef}
         style={isFullscreen ? { paddingBottom: `calc(env(safe-area-inset-bottom, 0px) + 1.5rem + ${fullscreenBottomInset}px)` } : undefined}
         onClick={(e) => {
           try {
             const cx = e.clientX;
             const cy = e.clientY;
+
             // If controls are hidden, allow clicking the area where the center play or fullscreen buttons appear
             if (!showControls) {
+              // center-area detection: expand hitbox slightly for easier tapping on mobile
               if (centerPlayRef.current) {
                 const r = centerPlayRef.current.getBoundingClientRect();
-                if (cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.bottom) {
-                  togglePlayPause();
-                  setShowControls(true);
-                  scheduleHideControls(3000);
+                const PAD = Math.min(40, Math.max(12, Math.round(Math.min(r.width, r.height) * 0.25)));
+                const left = r.left - PAD;
+                const right = r.right + PAD;
+                const top = r.top - PAD;
+                const bottom = r.bottom + PAD;
+                if (cx >= left && cx <= right && cy >= top && cy <= bottom) {
+                  // immediate play on center tap (bypass suppression heuristics)
+                  togglePlayPauseImmediate();
                   return;
                 }
               }
+
               if (fsButtonRef.current) {
                 const r2 = fsButtonRef.current.getBoundingClientRect();
                 if (cx >= r2.left && cx <= r2.right && cy >= r2.top && cy <= r2.bottom) {
@@ -1260,7 +1821,19 @@ function VideoPlayer({ video }) {
                   return;
                 }
               }
+
+              // other empty-area taps should NOT toggle playback — just reveal controls
+              setShowControls(true);
+              scheduleHideControls(3000);
+              return;
             }
+
+            // ignore clicks that immediately follow a pointer long-press (but only after center logic above)
+            if (pointerLongSuppressClickRef.current) {
+              try { pointerLongSuppressClickRef.current = false; } catch (e) {}
+              return;
+            }
+
             // otherwise toggle controls if clicking on the video element
             if (e.target === videoRef.current) {
               setShowControls((prev) => {
@@ -1299,6 +1872,11 @@ function VideoPlayer({ video }) {
           }}
         ></video>
 
+        {/* overlay that intercepts clicks during pending/active long-press */}
+        {(isPendingLongPress || isLongPressActive) && (
+          <div className="absolute inset-0 z-[100000]" style={{ pointerEvents: 'auto' }} />
+        )}
+
         {/* مؤشر التحميل */}
         {loading && (
           <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/50">
@@ -1317,6 +1895,15 @@ function VideoPlayer({ video }) {
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-40">
             <div className="flex flex-col items-center gap-2 bg-black/40 text-white/95 px-4 py-3 rounded-xl backdrop-blur-sm">
               <div className="text-3xl">{actionFeedback.icon ? actionFeedback.icon() : null}</div>
+              <div className="text-sm font-medium">{actionFeedback.text}</div>
+            </div>
+          </div>
+        )}
+
+        {actionFeedback.visible && actionFeedback.position === 'top' && (
+          <div className="absolute left-1/2 transform -translate-x-1/2 pointer-events-none z-50" style={{ top: '25%' }}>
+            <div className="flex flex-col items-center gap-2 bg-black/40 text-white/95 px-3 py-2 rounded-xl backdrop-blur-sm">
+              <div className="text-2xl">{actionFeedback.icon ? actionFeedback.icon() : null}</div>
               <div className="text-sm font-medium">{actionFeedback.text}</div>
             </div>
           </div>
@@ -1392,7 +1979,7 @@ function VideoPlayer({ video }) {
               </div>
               <button
                 onClick={retryPlayback}
-                className="px-6 py-3 bg-gradient-to-r from-red-600 to-red-700 text-white rounded-xl transition duration-150 shadow-lg active:scale-95 font-medium"
+                className="px-6 py-3 bg-gradient-to-r from-red-600 to-red-700 text-white rounded-xl transition duration-150 shadow-lg  font-medium"
               >
                 إعادة المحاولة
               </button>
@@ -1414,7 +2001,7 @@ function VideoPlayer({ video }) {
                   setCurrentTime(v.currentTime);
                   showActionFeedbackPos(Icons.Replay10, "-5s", 800, 'left');
                 }}
-                className="flex items-center justify-center w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-black/60 text-white shadow-lg transition-transform hover:scale-110"
+                className="controls-button flex items-center justify-center w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-black/60 text-white shadow-lg transition-transform "
               >
                 <Icons.Replay10 />
               </button>
@@ -1422,9 +2009,9 @@ function VideoPlayer({ video }) {
               <button
                 type="button"
                 aria-label={isPlaying ? "إيقاف" : "تشغيل"}
-                onClick={togglePlayPause}
+                onClick={togglePlayPauseImmediate}
                 ref={centerPlayRef}
-                className="flex items-center justify-center w-16 h-16 md:w-20 md:h-20 rounded-full bg-gradient-to-br from-red-600 to-red-700 text-white shadow-2xl transition-transform hover:scale-110 z-[99999]"
+                className="controls-button flex items-center justify-center w-16 h-16 md:w-20 md:h-20 rounded-full bg-gradient-to-br from-red-600 to-red-700 text-white shadow-2xl transition-transform  z-[99999]"
               >
                 {isPlaying ? <Icons.PauseCircle /> : <Icons.PlayArrow />}
               </button>
@@ -1439,7 +2026,7 @@ function VideoPlayer({ video }) {
                   setCurrentTime(v.currentTime);
                   showActionFeedbackPos(Icons.Forward10, "+5s", 800, 'right');
                 }}
-                className="flex items-center justify-center w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-black/60 text-white shadow-lg transition-transform hover:scale-110 z-[99999]"
+                className="controls-button flex items-center justify-center w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-black/60 text-white shadow-lg transition-transform  z-[99999]"
               >
                 <Icons.Forward10 />
               </button>
@@ -1510,7 +2097,7 @@ function VideoPlayer({ video }) {
                 />
 
                 <div
-                  className={`absolute top-0 h-full rounded-full relative shadow-lg ${hoverProgress ? "bg-gradient-to-r from-cyan-400 via-cyan-500 to-cyan-600" : "bg-gradient-to-r from-red-500 via-red-600 to-red-700"}`}
+                  className={`absolute top-0 h-full rounded-full shadow-lg ${hoverProgress ? "bg-gradient-to-r from-cyan-400 via-cyan-500 to-cyan-600" : "bg-gradient-to-r from-red-500 via-red-600 to-red-700"}`}
                   style={{
                     [isProgressRtl() ? "right" : "left"]: 0,
                     width: `${progressPct}%`,
@@ -1519,7 +2106,7 @@ function VideoPlayer({ video }) {
                 />
 
                 <div
-                  className={`absolute top-1/2 -translate-y-1/2 cursor-pointer transition duration-150 rounded-full bg-white border-3 ${hoverProgress ? "border-cyan-400" : "border-red-600"} shadow-xl`}
+                  className={`absolute top-1/2 -translate-y-1/2 cursor-pointer transition duration-150 rounded-full bg-white border-2 ${hoverProgress ? "border-cyan-400" : "border-red-600"} shadow-xl`}
                   style={{
                     [isProgressRtl() ? "right" : "left"]: `${progressPct}%`,
                     transform: isProgressRtl() ? "translate(50%, -50%)" : "translate(-50%, -50%)",
@@ -1543,7 +2130,7 @@ function VideoPlayer({ video }) {
             type="button"
             onClick={toggleFullscreen}
             ref={fsButtonRef}
-            className="flex items-center justify-center rounded-full bg-gradient-to-br from-gray-900/80 to-black/80 text-white min-w-[36px] h-8 sm:min-w-[44px] sm:h-11 sm:w-10 shadow-lg transition-transform hover:scale-105 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 hover:bg-white/10 p-1"
+            className="flex items-center justify-center rounded-full bg-gradient-to-br from-gray-900/80 to-black/80 text-white min-w-[36px] h-8 sm:min-w-[44px] sm:h-11 sm:w-10 shadow-lg transition-transform  focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 hover:bg-white/10 p-1"
             aria-label={isFullscreen ? "خروج من ملء الشاشة" : "ملء الشاشة"}
           >
             {isFullscreen ? <Icons.FullscreenExit /> : <Icons.Fullscreen />}
@@ -1557,8 +2144,8 @@ function VideoPlayer({ video }) {
           <div className="flex flex-row items-center justify-between gap-2 sm:gap-3">
             <div className="flex items-center gap-2 sm:gap-3 flex-wrap w-full sm:w-auto justify-start">
               <button
-                onClick={togglePlayPause}
-                className="flex items-center justify-center rounded-full bg-gradient-to-br from-gray-900 to-black min-w-[44px] h-9 sm:min-w-[56px] sm:h-12 sm:w-14 text-white shadow-2xl active:scale-95 transition-transform hover:scale-105 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+                onClick={togglePlayPauseImmediate}
+                className="controls-button flex items-center justify-center rounded-full bg-gradient-to-br from-gray-900 to-black min-w-[44px] h-9 sm:min-w-[56px] sm:h-12 sm:w-14 text-white shadow-2xl  transition-transform  focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
                 aria-label={isPlaying ? "إيقاف" : "تشغيل"}
               >
                 {isPlaying ? <Icons.Pause /> : <Icons.Play />}
@@ -1573,7 +2160,7 @@ function VideoPlayer({ video }) {
                     setVolume(prevVolumeRef.current > 0 ? prevVolumeRef.current : 1);
                   }
                 }}
-                className="flex items-center justify-center rounded-full bg-gradient-to-br from-gray-900/80 to-black/80 min-w-[36px] h-8 sm:min-w-[44px] sm:h-11 sm:w-10 text-white shadow active:scale-95 transition-transform hover:scale-105 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+                className="controls-button flex items-center justify-center rounded-full bg-gradient-to-br from-gray-900/80 to-black/80 min-w-[36px] h-8 sm:min-w-[44px] sm:h-11 sm:w-10 text-white shadow  transition-transform  focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
                 aria-label={volume === 0 ? "تشغيل الصوت" : "كتم الصوت"}
               >
                 {volume === 0 ? (
@@ -1596,6 +2183,12 @@ function VideoPlayer({ video }) {
                   if (v > 0) prevVolumeRef.current = v;
                   setVolume(v);
                 }}
+                onPointerDown={showControlsWithOptions}
+                onWheel={handleVolumeWheel}
+                onMouseEnter={() => disablePageScrollWhileInteracting()}
+                onMouseLeave={() => enablePageScrollAfterInteracting()}
+                onFocus={() => disablePageScrollWhileInteracting()}
+                onBlur={() => enablePageScrollAfterInteracting()}
                 className="hidden sm:block w-16 sm:w-28 ml-2 accent-red-600"
                 aria-label="مستوى الصوت"
               />
@@ -1611,7 +2204,7 @@ function VideoPlayer({ video }) {
                     ignoreDocClickRef.current = true;
                     setTimeout(() => (ignoreDocClickRef.current = false), 50);
                   }}
-                  className="flex items-center gap-2 rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-2 py-1 shadow-lg border border-white/10 min-w-[36px] h-8 sm:min-w-[44px] sm:h-10 transition-transform hover:scale-105 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+                  className="controls-button flex items-center gap-2 rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-2 py-1 shadow-lg border border-white/10 min-w-[36px] h-8 sm:min-w-[44px] sm:h-10 transition-transform  focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
                   aria-expanded={qualityMenuOpen}
                   aria-label="اختيار الجودة"
                 >
@@ -1649,7 +2242,7 @@ function VideoPlayer({ video }) {
                     ignoreDocClickRef.current = true;
                     setTimeout(() => (ignoreDocClickRef.current = false), 50);
                   }}
-                  className="flex items-center gap-2 rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-2 py-1 shadow-lg border border-white/10 min-w-[36px] h-8 sm:min-w-[44px] sm:h-10 transition-transform hover:scale-105 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+                  className="controls-button flex items-center gap-2 rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-2 py-1 shadow-lg border border-white/10 min-w-[36px] h-8 sm:min-w-[44px] sm:h-10 transition-transform focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
                   aria-expanded={speedMenuOpen}
                   aria-label="اختيار السرعة"
                 >
@@ -1686,7 +2279,7 @@ function VideoPlayer({ video }) {
                         onChange={(e) => {
                           const v = Math.round(parseFloat(e.target.value) * 100) / 100;
                           setPlaybackRate(v);
-                          showRateFeedback(v);
+                          try { showActionFeedbackPos(Icons.Speed, `${v.toFixed(2)}x`, 800, 'top'); } catch (e) { showRateFeedback(v); }
                         }}
                         className="w-full accent-red-600"
                         aria-label="شريط سرعة التشغيل"
@@ -1709,10 +2302,31 @@ function VideoPlayer({ video }) {
                     // compute position anchored to the settings button
                     try {
                       const rect = settingsRef.current && settingsRef.current.getBoundingClientRect();
-                      const MENU_W = 112; // w-28 in px (approx)
+                      // menu width/height estimates for placement logic
+                      const MENU_W = 140; // approx px (w-36)
+                      const MENU_H = 160; // estimated height in px
                       if (rect) {
-                        const left = Math.max(8, Math.min(rect.left, (window.innerWidth || 0) - MENU_W - 8));
-                        const top = rect.bottom + 6; // place below the button
+                        const winW = window.innerWidth || 0;
+                        const winH = window.innerHeight || 0;
+                        const left = Math.max(8, Math.min(rect.left, winW - MENU_W - 8));
+
+                        // compute available space below and above the button
+                        const bottomInset = isFullscreen ? (fullscreenBottomInset || 0) : 0;
+                        const availableBelow = winH - rect.bottom - bottomInset;
+                        const availableAbove = rect.top;
+
+                        let top;
+                        if (availableBelow >= MENU_H + 12) {
+                          // enough room below
+                          top = rect.bottom + 6;
+                        } else if (availableAbove >= MENU_H + 12) {
+                          // show above the button
+                          top = Math.max(8, rect.top - MENU_H - 6);
+                        } else {
+                          // fallback: clamp to within viewport
+                          top = Math.max(8, Math.min(rect.bottom + 6, winH - MENU_H - 8));
+                        }
+
                         setSettingsMenuPos({ left, top });
                       } else {
                         setSettingsMenuPos(null);
@@ -1723,17 +2337,17 @@ function VideoPlayer({ video }) {
                     setSettingsMenuOpen(willOpen);
                     if (!willOpen) setSettingsMenuPos(null);
                   }}
-                  className="flex items-center justify-center rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-2 py-1 shadow-lg border border-white/10 min-w-[36px] h-8 transition-transform hover:scale-105 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+                  className="controls-button flex items-center justify-center rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-2 py-1 shadow-lg border border-white/10 min-w-[36px] h-8 transition-transform  focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
                   aria-label="الإعدادات"
                 >
                   <Icons.Settings />
                 </button>
                 {settingsMenuOpen && (
                   <div
-                    className="fixed bg-gradient-to-b from-gray-900 to-black border border-white/10 rounded-md shadow-2xl py-1 z-[99999] w-28 max-h-36 overflow-y-auto backdrop-blur-lg"
+                    className="fixed bg-gradient-to-b from-gray-900 to-black border border-white/10 rounded-md shadow-2xl z-[99999] w-36 max-h-64 overflow-y-auto backdrop-blur-lg p-2"
                     style={settingsMenuPos ? { left: `${settingsMenuPos.left}px`, top: `${settingsMenuPos.top}px` } : { right: '0.75rem', bottom: '5rem' }}
                   >
-                    <div className="px-2 pt-1 text-[10px] text-white/80">الجودة</div>
+                    <div className="px-2 pt-1 text-xs text-white/80 font-medium">الجودة</div>
                     {video &&
                       video.qualities &&
                       [...video.qualities]
@@ -1742,16 +2356,16 @@ function VideoPlayer({ video }) {
                           <button
                             key={q.quality}
                             onClick={() => handleQualityChangePersist(q.quality)}
-                            className={`w-full text-right px-2 py-0.5 text-[11px] ${String(q.quality) === String(currentQuality) ? "bg-gradient-to-r from-red-600 to-red-800 text-white font-semibold" : "text-white/80"}`}
+                            className={`w-full text-right px-2 py-1 text-xs rounded ${String(q.quality) === String(currentQuality) ? "bg-gradient-to-r from-red-600 to-red-800 text-white font-semibold" : "text-white/80 hover:bg-white/5"}`}
                           >
                             {q.quality}p
                           </button>
                         ))}
-                    <div className="px-2 pt-1 text-[10px] text-white/80 flex items-center justify-between">
-                      <div>السرعة</div>
-                      <div className="font-semibold text-white text-[11px]">{playbackRate.toFixed(2)}x</div>
+                    <div className="px-2 pt-2 text-xs text-white/80 flex items-center justify-between">
+                      <div className="text-xs">السرعة</div>
+                      <div className="font-semibold text-white text-xs">{playbackRate.toFixed(2)}x</div>
                     </div>
-                    <div className="px-2 pb-2 pt-0.5">
+                    <div className="px-2 pb-2 pt-2">
                       <input
                         type="range"
                         min="0.25"
@@ -1766,6 +2380,18 @@ function VideoPlayer({ video }) {
                         className="w-full accent-red-600"
                       />
                     </div>
+                    <div className="border-t border-white/5 mt-2 pt-2 px-2">
+                      <button
+                        onClick={() => {
+                          setSettingsMenuOpen(false);
+                          handleDownload();
+                        }}
+                        disabled={isDownloading}
+                        className={`w-full text-center px-2 py-1 text-xs rounded ${(!isLoggedIn && !user?.isAdmin) ? 'opacity-50 cursor-not-allowed bg-transparent' : 'bg-gradient-to-r from-cyan-600 to-cyan-500 text-white'}`}
+                      >
+                        {isDownloading ? (downloadProgress != null ? `تحميل ${downloadProgress}%` : 'جاري التحميل...') : 'تحميل'}
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -1775,7 +2401,7 @@ function VideoPlayer({ video }) {
                 <button
                   onClick={handleDownload}
                   disabled={isDownloading}
-                  className={`flex items-center gap-2 rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-2 py-1 shadow-lg border border-white/10 min-w-[36px] h-8 sm:min-w-[44px] sm:h-10 transition-transform hover:scale-105 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 ${!isLoggedIn && !user?.isAdmin ? "opacity-50 cursor-not-allowed" : ""}`}
+                  className={`flex items-center gap-2 rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-2 py-1 shadow-lg border border-white/10 min-w-[36px] h-8 sm:min-w-[44px] sm:h-10 transition-transform focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 ${!isLoggedIn && !user?.isAdmin ? "opacity-50 cursor-not-allowed" : ""}`}
                   aria-label="تحميل الفيديو"
                 >
                   {isDownloading ? (
@@ -1807,5 +2433,11 @@ function VideoPlayer({ video }) {
     </div>
   );
 }
+
+VideoPlayer.propTypes = {
+  video: PropTypes.object,
+};
+
+// default props replaced by ES default parameter in function signature
 
 export default React.memo(VideoPlayer);
