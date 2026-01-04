@@ -37,9 +37,11 @@ const ChapterLecturesPage = () => {
   const [selectedLectureId, setSelectedLectureId] = useState(null);
   const [unavailableModal, setUnavailableModal] = useState({ open: false, lecture: null, videos: [] });
   const [lectureAvailability, setLectureAvailability] = useState({});
+  const [availCheckedIds, setAvailCheckedIds] = useState(new Set());
   const [availLoadingIds, setAvailLoadingIds] = useState(new Set());
   const [showDebugAvail, setShowDebugAvail] = useState(false);
   const playerRef = React.useRef(null);
+  const highlightTimeoutRef = React.useRef(null);
 
   // States for PDFs
   const [pdfs, setPdfs] = useState([]);
@@ -71,26 +73,15 @@ const ChapterLecturesPage = () => {
         try {
           const qp = new URLSearchParams(window.location.search);
           const l = routeLectureId || qp.get("lecture");
+          // Only select a lecture when it's explicitly provided in the route or query.
           if (l) {
             setSelectedLectureId(l);
-          } else if (
-            response.data?.lectures &&
-            response.data.lectures.length > 0
-          ) {
-            // choose the most recent lecture by createdAt as default
-            try {
-              const sorted = (response.data.lectures || [])
-                .slice()
-                .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-              if (sorted.length > 0) setSelectedLectureId(sorted[0]._id);
-            } catch (e) {
-              setSelectedLectureId(response.data.lectures[0]._id);
-            }
+            // schedule clearing the highlight and cleaning the URL for this lecture id
+            try { scheduleClearHighlight(l); } catch (e) {}
+            // URL cleaning will be performed after the highlight delay
           }
         } catch (e) {
-          if (response.data?.lectures && response.data.lectures.length > 0) {
-            setSelectedLectureId(response.data.lectures[0]._id);
-          }
+          // don't auto-select any lecture on load
         }
         setError(null);
       } catch (err) {
@@ -147,7 +138,10 @@ const ChapterLecturesPage = () => {
             }
           }),
         );
-        if (mounted) setLectureAvailability(availMap);
+        if (mounted) {
+          setLectureAvailability(availMap);
+          try { setAvailCheckedIds(new Set(Object.keys(availMap))); } catch (e) {}
+        }
       } catch (e) {
         // ignore
       }
@@ -278,10 +272,54 @@ const ChapterLecturesPage = () => {
   useEffect(() => {
     if (!selectedLectureId) return;
     try {
+      // try to find the element; if not yet rendered we'll wait until availCheckedIds updates
       const el = document.getElementById(`lecture-${selectedLectureId}`);
-      if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+      // Also, if the URL still contains a hash for the lecture, remove it (clean URL)
+      try {
+        if (window && window.location && window.location.hash && window.location.hash.indexOf(`#lecture-${selectedLectureId}`) === 0) {
+          const newUrl = window.location.pathname + (window.location.search || '');
+          try { window.history.replaceState(null, '', newUrl); } catch (e) {}
+        }
+      } catch (e) {}
     } catch (e) {}
-  }, [selectedLectureId]);
+  }, [selectedLectureId, availCheckedIds]);
+
+  // schedule clearing the selected highlight after a short delay and clean URL params
+  const scheduleClearHighlight = (id, delay = 3000) => {
+    try {
+      if (highlightTimeoutRef.current) {
+        clearTimeout(highlightTimeoutRef.current);
+      }
+      const capturedId = id;
+      highlightTimeoutRef.current = setTimeout(() => {
+        try {
+          setSelectedLectureId(null);
+        } catch (e) {}
+        // remove lecture query param and hash if any
+        try {
+          const u = new URL(window.location.href);
+          let changed = false;
+          if (u.searchParams.has('lecture')) { u.searchParams.delete('lecture'); changed = true; }
+          if (u.hash && u.hash.indexOf('#lecture-') === 0) { u.hash = ''; changed = true; }
+          // remove path segment /lecture/:id if it matches the captured id
+          try {
+            const lecturePath = `/lecture/${capturedId}`;
+            if (u.pathname && u.pathname.indexOf(lecturePath) !== -1) {
+              u.pathname = u.pathname.replace(lecturePath, "");
+              changed = true;
+            }
+          } catch (e) {}
+          if (changed) {
+            const cleaned = u.pathname + (u.search ? `?${u.searchParams.toString()}` : '');
+            try { window.history.replaceState(null, '', cleaned); } catch (e) {}
+          }
+        } catch (e) {}
+      }, delay);
+    } catch (e) {}
+  };
 
   // تسجيل عرض PDF
   const handlePDFView = useCallback(async (pdfId) => {
@@ -703,10 +741,29 @@ const ChapterLecturesPage = () => {
                           if (!available) brokenCount += 1;
                         });
                       }
+                      const allBrokenFlag = (la && la.allBroken) || (totalCount > 0 && brokenCount === totalCount);
+                      // If availability for this lecture hasn't been checked yet or is loading, show a skeleton placeholder
+                      if (!availCheckedIds.has(lecture._id) || availLoadingIds.has(lecture._id)) {
+                        return (
+                          <div key={lecture._id} className="w-full rounded-2xl bg-white/6 overflow-hidden animate-pulse">
+                            <div className="w-full h-40 bg-white/5" />
+                            <div className="p-3 space-y-2">
+                              <div className="h-4 bg-white/10 rounded w-3/4" />
+                              <div className="h-3 bg-white/8 rounded w-1/2" />
+                              <div className="flex items-center justify-between mt-4">
+                                <div className="h-3 bg-white/8 rounded w-1/5" />
+                                <div className="h-3 bg-white/8 rounded w-1/5" />
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      }
+
                       return (
                         <button
                           id={`lecture-${lecture._id}`}
                           key={lecture._id}
+                          style={{ transitionDelay: `${index * 60}ms` }}
                           onClick={async () => {
                             try {
                               // Prefer precomputed availability if present; otherwise fetch now and block navigation
@@ -717,6 +774,8 @@ const ChapterLecturesPage = () => {
                                   const fres = await videosAPI.getLectureAvailability(lecture._id);
                                   if (fres && fres.data && fres.data.ok) {
                                     setLectureAvailability((prev) => ({ ...(prev || {}), [lecture._id]: fres.data }));
+                                    // mark this lecture as checked so it can render
+                                    setAvailCheckedIds((s) => new Set([...Array.from(s), lecture._id]));
                                     la = fres.data;
                                   }
                                 } catch (e) {
@@ -752,7 +811,11 @@ const ChapterLecturesPage = () => {
                                 return;
                               }
                               setSelectedLectureId(lecture._id);
+                              try { scheduleClearHighlight(lecture._id); } catch (e) {}
                               setSelectedVideo(null);
+                              // navigate to lecture (push) but do not programmatically navigate back; the
+                              // scheduled cleaner will replace the URL path after the delay so the
+                              // highlight remains for the configured duration.
                               navigate(`/chapter/${chapterId}/lecture/${lecture._id}`);
                             } catch (e) {
                               console.debug('[ChapterLecturesPage] lecture click error', e);
@@ -773,11 +836,11 @@ const ChapterLecturesPage = () => {
                               }, 120);
                             }
                           }}
-                          className={`w-full text-right rounded-2xl transition-all duration-300 overflow-hidden border ${
+                          className={`w-full text-right rounded-2xl transition-all duration-300 ease-out transform overflow-hidden border ${
                             selectedLectureId === lecture._id
-                              ? "bg-gradient-to-r from-purple-500/20 to-blue-500/20 border-purple-500/30"
+                              ? "bg-gradient-to-r from-purple-500/25 to-blue-500/25 border-purple-500/40 ring-4 ring-purple-400/20 scale-105"
                               : "bg-white/5 border-white/10 hover:border-white/20"
-                          }`}
+                          } ${availCheckedIds.has(lecture._id) ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2'}`}
                           disabled={availLoadingIds.has(lecture._id)}
                         >
                           <div className="relative">
@@ -799,7 +862,7 @@ const ChapterLecturesPage = () => {
                             </div>
                             {totalCount > 0 && brokenCount > 0 && (
                               <div className="absolute top-2 left-2 bg-red-600 text-white text-xs px-2 py-0.5 rounded-full">
-                                {brokenCount} غير متاح
+                                {allBrokenFlag ? 'المحاضرة غير متاحة' : 'بعض الفيديوهات لا تعمل'}
                               </div>
                             )}
                             {availLoadingIds.has(lecture._id) && (

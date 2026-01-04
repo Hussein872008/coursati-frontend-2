@@ -58,7 +58,12 @@ const InstructorDetailsPage = () => {
 
         const chaptersRes =
           await chapterAPI.getChaptersByInstructor(instructorId);
-        setChapters(chaptersRes.data || []);
+        // sort chapters newest first
+        const fetched = chaptersRes.data || [];
+        const sorted = Array.isArray(fetched)
+          ? fetched.slice().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+          : fetched;
+        setChapters(sorted);
 
         // حساب الإحصائيات
         let totalLectures = 0;
@@ -66,7 +71,8 @@ const InstructorDetailsPage = () => {
         let totalPDFs = 0;
         let totalHours = 0;
 
-        chaptersRes.data?.forEach((chapter) => {
+        // use sorted chapters for stats
+        (sorted || []).forEach((chapter) => {
           totalLectures += chapter.lectures?.length || 0;
           chapter.lectures?.forEach((lecture) => {
             totalVideos += lecture.videos?.length || 0;

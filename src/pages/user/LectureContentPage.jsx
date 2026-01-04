@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import { useAuth } from "../../hooks/useAuth";
-import {
+import api, {
   chapterAPI,
   pdfsAPI,
   videosAPI,
@@ -17,6 +17,7 @@ import {
   PlayCircleIcon,
   DocumentTextIcon,
   XCircleIcon,
+  ArrowDownTrayIcon,
 } from "@heroicons/react/24/outline";
 import useTitle from "../../hooks/useTitle";
 
@@ -45,7 +46,13 @@ const LectureContentPage = () => {
   const [pdfOpenedMap, setPdfOpenedMap] = useState({});
   const [selectedVideo, setSelectedVideo] = useState(null);
   const playerRef = useRef(null);
+  const downloadStartTimesRef = useRef({}); // Track start time for each download
   const [videoProgressMap, setVideoProgressMap] = useState({});
+  const [downloadingVideoId, setDownloadingVideoId] = useState(null);
+  const [downloadProgress, setDownloadProgress] = useState(null);
+  const [downloadMenuOpenVideoId, setDownloadMenuOpenVideoId] = useState(null);
+  const [downloadDataMap, setDownloadDataMap] = useState({}); // Track download data per video
+  const [showDownloadPermissionModal, setShowDownloadPermissionModal] = useState(false);
 
   const totalDuration = useMemo(() => {
     return videos.reduce((sum, v) => sum + (Number(v.duration) || 0), 0);
@@ -67,6 +74,106 @@ const LectureContentPage = () => {
     chapter?.instructor?._id;
 
   useTitle("كورساتي — محتوى المحاضرة");
+
+  const handleDownloadVideo = async (video, quality) => {
+    try {
+      if (!(user?.isAdmin || user?.canDownloadVideos)) {
+        // عرض modal بتصميم احسن
+        setShowDownloadPermissionModal(true);
+        return;
+      }
+
+      if (!quality) {
+        alert("لم يتم تحديد جودة للتحميل");
+        return;
+      }
+
+      setDownloadingVideoId(video._id);
+      setDownloadProgress(0);
+      setDownloadMenuOpenVideoId(null);
+
+      // Store start time in ref
+      downloadStartTimesRef.current[video._id] = Date.now();
+
+      const userCode = localStorage.getItem("userCode");
+      const downloadUrl = `/api/videos/${video._id}/download?quality=${encodeURIComponent(quality)}${userCode ? `&userCode=${encodeURIComponent(userCode)}` : ""}`;
+      
+      const res = await api.get(downloadUrl, {
+        responseType: "blob",
+        onDownloadProgress: (ev) => {
+          try {
+            const loaded = ev.loaded || 0;
+            const total = ev.total || 0;
+            
+            if (total > 0) {
+              const pct = Math.round((loaded / total) * 100);
+              setDownloadProgress(pct);
+
+              // Calculate elapsed time and estimated remaining time
+              const now = Date.now();
+              const startTime = downloadStartTimesRef.current[video._id];
+              const elapsedMs = now - startTime;
+              const elapsedSeconds = elapsedMs / 1000;
+
+              if (elapsedSeconds > 0.5) {
+                // Only calculate after 0.5 seconds to avoid zero division
+                const bytesPerSecond = loaded / elapsedSeconds;
+                const remainingBytes = total - loaded;
+                const estimatedSeconds = Math.ceil(remainingBytes / bytesPerSecond);
+
+                setDownloadDataMap((prev) => ({
+                  ...prev,
+                  [video._id]: {
+                    startTime,
+                    estimatedTime: Math.max(0, estimatedSeconds),
+                    speed: bytesPerSecond,
+                    loaded,
+                    total,
+                  },
+                }));
+              }
+            }
+          } catch (e) {
+            console.error("Progress error:", e);
+          }
+        },
+      });
+
+      const blob = new Blob([res.data], {
+        type: res.headers["content-type"] || "application/octet-stream",
+      });
+      const url = window.URL.createObjectURL(blob);
+      const cd = res.headers["content-disposition"] || "";
+      let filename = `${video?.title ? video.title.replace(/[^a-z0-9\-_. ]/gi, "_") : "video"}_${quality}p.ts`;
+      const m = cd.match(/filename\*=UTF-8''([^;\n\r]+)/);
+      if (m && m[1]) filename = decodeURIComponent(m[1]);
+      else {
+        const m2 = cd.match(/filename="?([^";]+)"?/);
+        if (m2 && m2[1]) filename = m2[1];
+      }
+
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      
+      setTimeout(() => window.URL.revokeObjectURL(url), 10000);
+    } catch (err) {
+      console.error("Download error:", err);
+      alert("فشل التحميل. حاول مرة أخرى.");
+    } finally {
+      setDownloadingVideoId(null);
+      setDownloadProgress(null);
+      setDownloadDataMap((prev) => {
+        const newMap = { ...prev };
+        delete newMap[video._id];
+        return newMap;
+      });
+      delete downloadStartTimesRef.current[video._id];
+    }
+  };
 
   useEffect(() => {
     const load = async () => {
@@ -269,15 +376,7 @@ const LectureContentPage = () => {
   return (
     <div className="min-h-screen" dir="rtl">
       <UserHeader showBackButton={false} />
-      {/* Lecture-level unavailable banner: show if there are videos and none are available */}
-      {videos.length > 0 && videos.every((vv) => vv._available === false) && (
-        <div className="max-w-6xl mx-auto px-3 sm:px-6 p-3 sm:p-4">
-          <div className="rounded-lg bg-red-900/95 border border-red-800 text-white p-4 sm:p-6 mb-4 shadow-md">
-            <div className="font-bold text-lg sm:text-xl">عذراً — المحاضرة مؤقتاً غير متاحة</div>
-            <div className="text-sm sm:text-base mt-1">جميع فيديوهات هذه المحاضرة غير متاحة حالياً. نحن نعمل على حل المشكلة وسوف نعيد تشغيلها قريباً. نعتذر عن الإزعاج.</div>
-          </div>
-        </div>
-      )}
+      
       <div className="max-w-6xl mx-auto px-4 sm:px-6 p-6">
         <div className="mb-6">
           <div className="mb-2 text-sm text-white/60">
@@ -371,9 +470,8 @@ const LectureContentPage = () => {
                       const prog = videoProgressMap[v._id];
                       return (
                         <div key={v._id} className="relative">
-                          <button
+                          <div
                             onClick={() => {
-                              if (!isAvailable) return; // prevent opening unavailable videos
                               setSelectedVideo(v);
                               // mark as opened immediately and store initial progress
                               try {
@@ -415,15 +513,14 @@ const LectureContentPage = () => {
                               })();
                             }}
                             className={
-                              "w-full text-right p-3 rounded-xl border " +
+                              "w-full text-right p-3 rounded-xl border cursor-pointer " +
                               (isSelected
                                 ? "bg-cyan-800/40 border-cyan-500"
                                 : isAvailable
                                 ? "bg-white/5 border-white/10"
-                                : "bg-gray-700/30 border-red-600/30 cursor-not-allowed") +
+                                : "bg-gray-700/30 border-white/10") +
                               " hover:border-white/20"
                             }
-                            disabled={!isAvailable}
                           >
                             <div className="flex items-center justify-between">
                               <div className="flex items-center gap-3">
@@ -445,16 +542,87 @@ const LectureContentPage = () => {
                                   {idx + 1}. {v.title}
                                 </div>
                               </div>
-                              <div className="text-white/60 text-sm">
-                                {v.duration ? formatDuration(v.duration) : ""}
+                              <div className="flex items-center gap-3">
+                                <div className="text-white/60 text-sm">
+                                  {v.duration ? formatDuration(v.duration) : ""}
+                                </div>
+                                <div className="relative flex items-center gap-2">
+                                  {/* Download button - يظهر دائماً */}
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      if (downloadingVideoId === v._id) return;
+                                      
+                                      // إذا لم يكن المستخدم مسموح له بالتحميل، اعرض modal
+                                      if (!(user?.isAdmin || user?.canDownloadVideos)) {
+                                        setShowDownloadPermissionModal(true);
+                                        return;
+                                      }
+                                      
+                                      setDownloadMenuOpenVideoId(
+                                        downloadMenuOpenVideoId === v._id ? null : v._id
+                                      );
+                                    }}
+                                    disabled={downloadingVideoId === v._id}
+                                    className="p-2 rounded-lg hover:bg-amber-500/20 transition-colors disabled:opacity-50 relative"
+                                    title="تحميل الفيديو"
+                                  >
+                                    <ArrowDownTrayIcon className="w-5 h-5 text-amber-400" />
+                                  </button>
+
+                                  {/* Progress percentage - shown next to icon when downloading */}
+                                  {downloadingVideoId === v._id && (
+                                    <div className="flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-500/10 border border-amber-500/30 animate-in fade-in duration-200">
+                                      <div className="w-3 h-3 border-2 border-amber-500/40 border-t-amber-500 rounded-full animate-spin" />
+                                      <span className="text-xs font-semibold text-amber-400 min-w-[30px]">
+                                        {downloadProgress || 0}%
+                                      </span>
+                                      {downloadDataMap[v._id]?.estimatedTime && downloadDataMap[v._id].estimatedTime > 0 && (
+                                        <>
+                                          <span className="text-amber-400/50 text-xs">•</span>
+                                          <span className="text-xs text-amber-300">
+                                            {downloadDataMap[v._id].estimatedTime}ث
+                                          </span>
+                                        </>
+                                      )}
+                                    </div>
+                                  )}
+
+                                  {/* Download quality menu - يظهر فقط للمسموح لهم */}
+                                  {downloadMenuOpenVideoId === v._id && downloadingVideoId !== v._id && (user?.isAdmin || user?.canDownloadVideos) && (
+                                    <div className="absolute bottom-full right-0 mb-2 bg-gray-900 border border-amber-500/40 rounded-lg shadow-lg animate-in fade-in slide-in-from-bottom-2 duration-200 z-50 min-w-max">
+                                      <div className="p-2 space-y-1">
+                                        {v?.qualities && v.qualities.length > 0 ? (
+                                          v.qualities.map((q) => (
+                                            <button
+                                              key={q._id || q.quality}
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleDownloadVideo(v, q.quality);
+                                              }}
+                                                className="w-full text-right px-3 py-2 text-sm text-amber-300 hover:bg-amber-500/20 rounded transition-colors"
+                                              >
+                                                {q.quality}p
+                                              </button>
+                                            ))
+                                          ) : (
+                                            <div className="px-3 py-2 text-xs text-white/60">
+                                              لا توجد جودات متاحة
+                                            </div>
+                                          )}
+                                        </div>
+                                      </div>
+                                    )}
+                                </div>
                               </div>
                             </div>
                             {!isAvailable && (
-                              <div className="mt-2 text-sm text-red-300">
-                                عذراً، هذا الفيديو غير متاح حالياً. سنعمل على إصلاحه قريباً.
+                              <div className="mt-2 text-sm text-red-400 flex items-start gap-2">
+                                <XCircleIcon className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                                <span>هذا الفيديو غير متاح حالياً. يرجى محاولة لاحقاً.</span>
                               </div>
                             )}
-                          </button>
+                          </div>
                           {prog && (
                             <div className="mt-2 px-1">
                               <div className="h-2 bg-white/10 rounded overflow-hidden">
@@ -535,6 +703,47 @@ const LectureContentPage = () => {
           </div>
         </div>
       </div>
+
+      {/* Download Permission Modal */}
+      {showDownloadPermissionModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" dir="rtl">
+          <div className="bg-gradient-to-br from-gray-800 to-gray-900 rounded-2xl border border-white/10 shadow-2xl max-w-md w-full animate-in fade-in zoom-in duration-300">
+            {/* Header with icon */}
+            <div className="p-6 border-b border-white/10">
+              <div className="flex items-start gap-4">
+                <div className="w-12 h-12 rounded-lg bg-amber-500/20 flex items-center justify-center flex-shrink-0">
+                  <svg className="w-6 h-6 text-amber-400" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M13 10a1 1 0 11-2 0 1 1 0 012 0z" clipRule="evenodd" />
+                    <path fillRule="evenodd" d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2zM3 12a9 9 0 1118 0 9 9 0 01-18 0z" clipRule="evenodd" />
+                  </svg>
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-lg font-bold text-white">صلاحية محدودة</h3>
+                  <p className="text-sm text-white/60 mt-1">لا يمكنك تحميل هذا الفيديو</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Content */}
+            <div className="p-6">
+              <p className="text-white/80 text-sm leading-relaxed mb-4">
+                للأسف، فقط المشرفين والمستخدمين المسموح لهم يمكنهم تحميل الفيديوهات.
+              </p>
+            </div>
+
+            {/* Footer with buttons */}
+            <div className="p-4 border-t border-white/10 flex items-center gap-3">
+              <button
+                onClick={() => setShowDownloadPermissionModal(false)}
+                className="flex-1 px-4 py-2 rounded-lg bg-white/10 hover:bg-white/20 text-white transition-colors font-medium text-sm"
+              >
+                فهمت
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <UserFooter />
     </div>
   );

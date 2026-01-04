@@ -16,9 +16,9 @@ function VideoPlayer({ video = null }) {
   };
   
   // long-press/jitter tuning
-  const CONTROLS_REVEAL_SUPPRESS_MS = 1000; // extend suppression after controls reveal
-  const JITTER_WINDOW_MS = 500; // window to count rapid pointerdown events
-  const JITTER_COUNT_THRESHOLD = 4; // number of pointerdowns in window considered jitter
+  const CONTROLS_REVEAL_SUPPRESS_MS = 1000;
+  const JITTER_WINDOW_MS = 500;
+  const JITTER_COUNT_THRESHOLD = 4;
   const pointerDownTimesRef = useRef([]);
   const lastJitterAtRef = useRef(0);
   const videoRef = useRef(null);
@@ -45,7 +45,8 @@ function VideoPlayer({ video = null }) {
   const [showErrorOverlay, setShowErrorOverlay] = useState(false);
   const errorTimerRef = useRef(null);
   const errorSetDelayRef = useRef(null);
-  // collect transient feedback timers so we can clear them on unmount
+  const hlsErrorAttemptsRef = useRef(0); // تتبع عدد محاولات الخطأ (max 2)
+  const qualityChangeAttemptsRef = useRef(0); // تتبع محاولات تغيير الجودة (max 2)
   const feedbackTimersRef = useRef(new Set());
   const spaceLongPressTimerRef = useRef(null);
   const pointerLongPressTimerRef = useRef(null);
@@ -69,7 +70,6 @@ function VideoPlayer({ video = null }) {
     }
   });
 
-  // refs that must be top-level (do not call hooks inside state initializers)
   const _initialVolumeRef = useRef(true);
   const prevPlaybackRateRef = useRef(null);
   const longHoldCountRef = useRef(0);
@@ -84,6 +84,7 @@ function VideoPlayer({ video = null }) {
       return 1.0;
     }
   });
+  
   const [isLongPressActive, setIsLongPressActive] = useState(false);
   const [isPendingLongPress, setIsPendingLongPress] = useState(false);
   const controlsRevealedAtRef = useRef(0);
@@ -105,24 +106,42 @@ function VideoPlayer({ video = null }) {
 
   const [rateFeedback, setRateFeedback] = useState({ visible: false, rate: 1 });
   const [volumeFeedback, setVolumeFeedback] = useState({ visible: false, volume: 0 });
-  const [isDownloading, setIsDownloading] = useState(false);
-  const [downloadProgress, setDownloadProgress] = useState(null);
+  const [showVolumeSlider, setShowVolumeSlider] = useState(false);
   const [hoverProgress, setHoverProgress] = useState(false);
   const [hoverTime, setHoverTime] = useState(null);
   const [hoverPosPct, setHoverPosPct] = useState(0);
 
+  const formatTime = useCallback((seconds) => {
+    if (seconds == null || isNaN(seconds)) return "0:00";
+    const sec = Math.floor(seconds);
+    const hrs = Math.floor(sec / 3600);
+    const mins = Math.floor((sec % 3600) / 60);
+    const secs = sec % 60;
+    if (hrs > 0) {
+      return `${hrs}:${mins < 10 ? "0" : ""}${mins}:${secs < 10 ? "0" : ""}${secs}`;
+    }
+    return `${mins}:${secs < 10 ? "0" : ""}${secs}`;
+  }, []);
+
   const handleProgressMouseMove = useCallback((e) => {
     try {
-      if (!progressRef.current || !duration || isTouchInput.current) return;
+      if (!progressRef.current || !duration || !e || e.clientX === undefined) return;
       const rect = progressRef.current.getBoundingClientRect();
-      const clientX = (e && e.clientX) || (e.touches && e.touches[0] && e.touches[0].clientX) || 0;
-      const x = clientX - rect.left;
+      const clientX = e.clientX;
+      
+      // حساب الموقع حسب الاتجاه (RTL/LTR)
+      const isRtl = getComputedStyle(progressRef.current).direction === "rtl";
+      const x = isRtl ? rect.right - clientX : clientX - rect.left;
+      
+      if (x < 0 || x > rect.width) return;
       const pct = Math.max(0, Math.min(1, rect.width > 0 ? x / rect.width : 0));
       const seconds = Math.round(pct * duration);
       setHoverPosPct(pct * 100);
       setHoverTime(formatTime(seconds));
-    } catch (err) {}
-  }, [duration]);
+    } catch (err) {
+      console.error('handleProgressMouseMove error:', err);
+    }
+  }, [duration, formatTime]);
 
   const hideControlsTimeoutRef = useRef(null);
   const prevVolumeRef = useRef(volume);
@@ -135,14 +154,11 @@ function VideoPlayer({ video = null }) {
   const qualityOpenRef = useRef(false);
   const speedOpenRef = useRef(false);
   const settingsOpenRef = useRef(false);
-  // When toggling menus we briefly ignore the global document click
-  // handler to avoid the menu closing immediately after opening.
   const ignoreDocClickRef = useRef(false);
   const [settingsMenuPos, setSettingsMenuPos] = useState(null);
 
   const { user, isLoggedIn } = useAuth();
 
-  // متغيرات جديدة للتحكم بالتفاعل
   const isTouchDevice = useCallback(() => {
     return ('ontouchstart' in window) || 
            (navigator.maxTouchPoints > 0) ||
@@ -166,13 +182,11 @@ function VideoPlayer({ video = null }) {
     type: null
   });
   
-  // توقيتات ثابتة
   const MOBILE_HIDE_TIMEOUT = 3000;
   const DESKTOP_HIDE_TIMEOUT = 2000;
   const MOBILE_TAP_TIMEOUT = 300;
   const LONG_PRESS_THRESHOLD = 500;
   
-  // دقة الفيديو المتاحة
   const RES_MAP = {
     "144": { w: 256, h: 144 },
     "240": { w: 426, h: 240 },
@@ -184,13 +198,11 @@ function VideoPlayer({ video = null }) {
     "2160": { w: 3840, h: 2160 },
   };
 
-  // وظائف مساعدة للتحكم في إخفاء عناصر التحكم
   const scheduleHideControls = useCallback((delay) => {
     if (hideControlsTimeoutRef.current) {
       clearTimeout(hideControlsTimeoutRef.current);
     }
     
-    // لا نخفي أثناء الضغطة الطويلة أو فتح القوائم
     if (longPressState.active || spaceLongActiveRef.current) return;
     if (qualityOpenRef.current || speedOpenRef.current || settingsOpenRef.current) return;
     
@@ -210,7 +222,6 @@ function VideoPlayer({ video = null }) {
     }
   }, []);
 
-  // إظهار التحكم مع الخيارات
   const showControlsWithOptions = useCallback((options = {}) => {
     const { immediate = true, extendTimeout = true } = options;
     
@@ -230,7 +241,6 @@ function VideoPlayer({ video = null }) {
     }
   }, [clearHideControls, scheduleHideControls]);
 
-  // إخفاء التحكم
   const hideControlsSafe = useCallback(() => {
     if (qualityMenuOpen || speedMenuOpen || settingsMenuOpen) return;
     if (longPressState.active || spaceLongActiveRef.current) return;
@@ -242,7 +252,6 @@ function VideoPlayer({ video = null }) {
     }));
   }, [qualityMenuOpen, speedMenuOpen, settingsMenuOpen, longPressState.active]);
 
-  // عرض ردود الفعل المرئية
   const showActionFeedback = useCallback((icon, text, timeout = 800) => {
     setActionFeedback({ visible: true, icon, text, position: 'center' });
     const t = setTimeout(() => {
@@ -262,7 +271,6 @@ function VideoPlayer({ video = null }) {
     try { feedbackTimersRef.current.add(t); } catch (e) {}
   }, []);
 
-  // enhanced action feedback that supports positioning: 'center' | 'left' | 'right'
   const showActionFeedbackPos = useCallback((icon, text, timeout = 800, position = 'center') => {
     setActionFeedback({ visible: true, icon, text, position });
     setTimeout(
@@ -280,7 +288,6 @@ function VideoPlayer({ video = null }) {
         try { dlog('startDoubleSpeed', { from: playbackRate, to: next }); } catch (e) {}
         setPlaybackRate(next);
         setActionFeedback({ visible: true, icon: Icons.Speed, text: `${next.toFixed(2)}x`, position: 'top' });
-        // prevent accidental toggles immediately after long-press
         try { ignoreToggleRef.current = true; } catch (e) {}
         try { setIsLongPressActive(true); } catch (e) {}
       }
@@ -331,21 +338,17 @@ function VideoPlayer({ video = null }) {
       if (next > 0) prevVolumeRef.current = next;
       setVolume(next);
       showVolumeFeedback(next);
-      // keep controls visible when adjusting with wheel
       showControlsWithOptions();
-    } catch (err) {
-      // ignore
-    }
+    } catch (err) {}
   }, [volume, showVolumeFeedback, showControlsWithOptions]);
 
-  // Prevent page scrolling when interacting with the volume control on desktop
   const preventScrollHandler = useCallback((ev) => {
     try { ev.preventDefault(); } catch (e) {}
   }, []);
 
   const disablePageScrollWhileInteracting = useCallback(() => {
     try {
-      if (isTouchInput.current) return; // don't block on touch devices
+      if (isTouchInput.current) return;
       document.addEventListener('wheel', preventScrollHandler, { passive: false });
       document.addEventListener('touchmove', preventScrollHandler, { passive: false });
     } catch (e) {}
@@ -366,23 +369,19 @@ function VideoPlayer({ video = null }) {
     showVolumeFeedback(volume);
   }, [volume, showVolumeFeedback]);
 
-  // keep refs in sync with menu open state so callbacks can read latest values
   useEffect(() => { qualityOpenRef.current = qualityMenuOpen; }, [qualityMenuOpen]);
   useEffect(() => { speedOpenRef.current = speedMenuOpen; }, [speedMenuOpen]);
   useEffect(() => { settingsOpenRef.current = settingsMenuOpen; }, [settingsMenuOpen]);
 
-  // التشغيل الآمن
   const safePlay = useCallback(() => {
     try {
       const v = videoRef.current;
       if (!v) return;
-      // Optimistically set playing state so UI responds immediately.
       setIsPlaying(true);
       const playPromise = v.play();
       if (playPromise && typeof playPromise.then === "function") {
         playPromise.then(() => {
           setIsPlaying(true);
-          // clear any transient error state when play succeeds
           try { setError(null); } catch (e) {}
           try { setShowErrorOverlay(false); } catch (e) {}
           if (errorTimerRef.current) {
@@ -396,7 +395,6 @@ function VideoPlayer({ video = null }) {
         }).catch((err) => {
           if (err && err.name === "AbortError") return;
           console.warn("Playback error:", err);
-          // revert optimistic state on failure
           try { setIsPlaying(false); } catch (e) {}
         });
       }
@@ -405,21 +403,17 @@ function VideoPlayer({ video = null }) {
     }
   }, []);
 
-  // التبديل بين التشغيل والإيقاف
   const togglePlayPause = useCallback(() => {
     try {
-      // ignore toggle when recently triggered by a long-press or when controls were just revealed
       try {
         dlog('togglePlayPause called, ignoreToggle=', ignoreToggleRef.current);
         const now = Date.now();
         if (controlsRevealedAtRef.current && (now - controlsRevealedAtRef.current) < CONTROLS_REVEAL_SUPPRESS_MS) {
           dlog('togglePlayPause suppressed: controls were just revealed', { age: now - controlsRevealedAtRef.current });
-          // consume the reveal timestamp to avoid double-suppress
           controlsRevealedAtRef.current = 0;
           return;
         }
         if (ignoreToggleRef.current) {
-          // consume the flag and do nothing
           ignoreToggleRef.current = false;
           dlog('togglePlayPause suppressed by ignoreToggle');
           return;
@@ -440,7 +434,6 @@ function VideoPlayer({ video = null }) {
     }
   }, [safePlay, scheduleHideControls]);
 
-  // immediate toggle that bypasses the reveal/suppression heuristics
   const togglePlayPauseImmediate = useCallback(() => {
     try {
       const v = videoRef.current;
@@ -458,7 +451,6 @@ function VideoPlayer({ video = null }) {
     }
   }, [safePlay, scheduleHideControls]);
 
-  // إعادة المحاولة
   const retryPlayback = useCallback(() => {
     try {
       setError(null);
@@ -485,24 +477,16 @@ function VideoPlayer({ video = null }) {
     }
   }, []);
 
-  // التبديل بين وضع ملء الشاشة والعادي
   const toggleFullscreen = useCallback(() => {
     try {
       if (!videoRef.current) return;
-      // request fullscreen on the player container itself to avoid touching
-      // parent elements (which can cause layout changes or remounts in some browsers)
       const container = containerRef.current || videoRef.current.parentElement;
       if (!container) return;
-      // Do NOT set `isFullscreen` here — let the `fullscreenchange` event
-      // update state. For entering/exiting we simply invoke the browser API.
       if (!document.fullscreenElement) {
-        // Request fullscreen on the player container so overlays/controls
-        // that are siblings of the <video> element are also shown in FS.
         if (container.requestFullscreen) container.requestFullscreen();
         else if (container.webkitRequestFullscreen) container.webkitRequestFullscreen();
         else if (container.msRequestFullscreen) container.msRequestFullscreen();
         else {
-          // fallback to video element if container FS isn't available
           const v = videoRef.current;
           if (v && v.requestFullscreen) v.requestFullscreen();
           else if (v && v.webkitRequestFullscreen) v.webkitRequestFullscreen();
@@ -518,16 +502,14 @@ function VideoPlayer({ video = null }) {
     }
   }, []);
 
-  // تحديث أبعاد الفيديو
   const updateVideoSizing = useCallback(() => {
     try {
       const v = videoRef.current;
       if (!v) return;
       if (isFullscreen) {
-        // In fullscreen fit by height so the whole video height is visible
         v.style.width = "auto";
         v.style.height = "100%";
-        v.style.objectFit = "contain"; // ensure the entire frame is visible
+        v.style.objectFit = "contain";
         v.style.maxWidth = "100%";
         v.style.maxHeight = "100%";
         v.style.display = "block";
@@ -546,20 +528,6 @@ function VideoPlayer({ video = null }) {
     }
   }, [isFullscreen]);
 
-  // تحويل الوقت إلى تنسيق مقروء
-  const formatTime = useCallback((seconds) => {
-    if (seconds == null || isNaN(seconds)) return "0:00";
-    const sec = Math.floor(seconds);
-    const hrs = Math.floor(sec / 3600);
-    const mins = Math.floor((sec % 3600) / 60);
-    const secs = sec % 60;
-    if (hrs > 0) {
-      return `${hrs}:${mins < 10 ? "0" : ""}${mins}:${secs < 10 ? "0" : ""}${secs}`;
-    }
-    return `${mins}:${secs < 10 ? "0" : ""}${secs}`;
-  }, []);
-
-  // التحقق من اتجاه شريط التقدم
   const isProgressRtl = useCallback(() => {
     try {
       const el = progressRef.current;
@@ -570,7 +538,6 @@ function VideoPlayer({ video = null }) {
     }
   }, []);
 
-  // التعامل مع البحث في الفيديو
   const handleSeek = useCallback((e) => {
     if (!videoRef.current || !duration) return;
     const rect = e.currentTarget.getBoundingClientRect();
@@ -583,7 +550,6 @@ function VideoPlayer({ video = null }) {
     setCurrentTime(newTime);
   }, [duration, isProgressRtl]);
 
-  // بدء السحب على شريط التقدم
   const handlePointerSeekStart = useCallback((e) => {
     if (!videoRef.current || !duration) return;
     e.preventDefault();
@@ -596,7 +562,6 @@ function VideoPlayer({ video = null }) {
     showControlsWithOptions();
   }, [duration, showControlsWithOptions]);
 
-  // حركة السحب على شريط التقدم
   const handlePointerSeekMove = useCallback((e) => {
     if (!progressDragRef.current || !videoRef.current || !duration || !progressRef.current) return;
     e.preventDefault();
@@ -611,7 +576,6 @@ function VideoPlayer({ video = null }) {
     setCurrentTime(newTime);
   }, [duration, isProgressRtl]);
 
-  // إنهاء السحب على شريط التقدم
   const handlePointerSeekEnd = useCallback(() => {
     progressDragRef.current = false;
     progressDragStartXRef.current = 0;
@@ -621,11 +585,9 @@ function VideoPlayer({ video = null }) {
     scheduleHideControls(1000);
   }, [scheduleHideControls]);
 
-  // تطبيق الجودة على HLS
   const applyQualityToHls = useCallback((hls, quality) => {
     if (!hls || !hls.levels || !quality) return;
     const target = RES_MAP[String(quality)];
-    // prefer exact height match if possible
     let bestIdx = -1;
     if (target) {
       for (let i = 0; i < hls.levels.length; i++) {
@@ -638,13 +600,11 @@ function VideoPlayer({ video = null }) {
       }
     }
 
-    // fallback: choose closest height (ignore zero-height variants where possible)
     if (bestIdx < 0) {
       let bestDiff = Infinity;
       for (let i = 0; i < hls.levels.length; i++) {
         const lvl = hls.levels[i];
         const h = lvl?.height || 0;
-        // if all levels have height=0, we'll still pick the smallest diff (0)
         const diff = Math.abs((target ? target.h : Number(quality)) - h);
         if (diff < bestDiff) {
           bestDiff = diff;
@@ -655,13 +615,11 @@ function VideoPlayer({ video = null }) {
 
     if (bestIdx >= 0) {
       try {
-        // disable automatic ABR
+        // إعادة تعيين محاولات تغيير الجودة عند محاولة جديدة
+        qualityChangeAttemptsRef.current = 0;
         try { hls.autoLevelEnabled = false; } catch (e) {}
-        // request the chosen level for the next fragment
         try { hls.nextLevel = bestIdx; } catch (e) {}
-        // also set currentLevel to enforce immediate switch
         try { hls.currentLevel = bestIdx; } catch (e) {}
-        // re-apply shortly in case hls overwrites during switches
         setTimeout(() => {
           try { hls.currentLevel = bestIdx; } catch (e) {}
         }, 250);
@@ -671,16 +629,21 @@ function VideoPlayer({ video = null }) {
     }
   }, []);
 
-  // تغيير جودة الفيديو
   const handleQualityChangePersist = useCallback((q) => {
     try {
       localStorage.setItem(`video-default-quality-${video._id}`, String(q));
     } catch (e) {}
     setCurrentQuality(q);
-    setQualityMenuOpen(false);
+    
+    // Show feedback to user
+    try { showActionFeedbackPos(Icons.Quality, `جودة ${q}p`, 800, 'top'); } catch (e) {}
+    
+    // Delay menu close to ensure state updates first (100ms for mobile reliability)
+    setTimeout(() => {
+      setQualityMenuOpen(false);
+      setSettingsMenuOpen(false);
+    }, 100);
 
-    // Immediately apply the chosen quality: either instruct Hls.js to switch
-    // or replace the native HLS src (browsers like Safari).
     try {
       const uc = localStorage.getItem("userCode");
       const did = localStorage.getItem("deviceId");
@@ -694,7 +657,6 @@ function VideoPlayer({ video = null }) {
       const base = API_BASE ? API_BASE.replace(/\/$/, '') : '';
       const playlistUrl = base ? `${base}${relativePath}` : relativePath;
 
-      // preserve current playback position and play-state
       try {
         const v = videoRef.current;
         savedPosRef.current = v ? (v.currentTime || 0) : 0;
@@ -722,16 +684,13 @@ function VideoPlayer({ video = null }) {
 
       if (hlsRef.current) {
         try {
-          // Force HLS.js to load the playlist for the requested quality
           console.debug && console.debug('HLS: loading playlist for quality', q, playlistUrl);
           try { hlsRef.current.autoLevelEnabled = false; } catch (e) {}
           try { hlsRef.current.loadSource(playlistUrl); } catch (e) {}
           try { hlsRef.current.attachMedia(videoRef.current); } catch (e) {}
-              // attempt to resume playback after switching source
               setTimeout(() => {
                 try { safePlay(); } catch (e) {}
               }, 250);
-          // also attempt explicit level selection as a fallback
           try { applyQualityToHls(hlsRef.current, q); } catch (e) {}
         } catch (e) {}
       } else if (videoRef.current) {
@@ -752,14 +711,12 @@ function VideoPlayer({ video = null }) {
     } catch (e) {
       console.warn('Apply quality error:', e);
     }
-  }, [video, applyQualityToHls, safePlay]);
+  }, [video, applyQualityToHls, safePlay, showActionFeedbackPos]);
 
-  // التعديل على سرعة التشغيل
   const adjustRate = useCallback((delta) => {
     try {
       const v = Math.round(Math.max(0.25, Math.min(3, playbackRate + delta)) * 100) / 100;
       setPlaybackRate(v);
-      // show action feedback (positioned at top half) when rate changed from controls
       try { showActionFeedbackPos(Icons.Speed, `${v.toFixed(2)}x`, 800, 'top'); } catch (e) { showRateFeedback(v); }
       showControlsWithOptions();
     } catch (e) {
@@ -767,75 +724,6 @@ function VideoPlayer({ video = null }) {
     }
   }, [playbackRate, showRateFeedback, showControlsWithOptions]);
 
-  // تحميل الفيديو
-  const handleDownload = useCallback(async () => {
-    if (isDownloading) return;
-    if (!(user?.isAdmin || user?.canDownloadVideos)) {
-      setError("فقط المشرفين والمستخدمين المسموح لهم يمكنهم التحميل");
-      return;
-    }
-    if (!currentQuality) {
-      setError("اختر جودة أولاً");
-      return;
-    }
-
-    try {
-      const userCode = localStorage.getItem("userCode");
-      const downloadUrl = `/api/videos/${video._id}/download?quality=${encodeURIComponent(currentQuality)}${userCode ? `&userCode=${encodeURIComponent(userCode)}` : ""}`;
-      
-      setIsDownloading(true);
-      setDownloadProgress(null);
-
-      const res = await api.get(downloadUrl, {
-        responseType: "blob",
-        onDownloadProgress: (ev) => {
-          try {
-            const loaded = ev.loaded || 0;
-            const total = ev.total || 0;
-            if (total > 0) {
-              const pct = Math.round((loaded / total) * 100);
-              setDownloadProgress(pct);
-            } else {
-              setDownloadProgress(null);
-            }
-          } catch (e) {}
-        },
-      });
-
-      const blob = new Blob([res.data], {
-        type: res.headers["content-type"] || "application/octet-stream",
-      });
-      const url = window.URL.createObjectURL(blob);
-      const cd = res.headers["content-disposition"] || "";
-      let filename = `${video && video.title ? video.title.replace(/[^a-z0-9\-_. ]/gi, "_") : "video"}_${currentQuality}p.ts`;
-      const m = cd.match(/filename\*=UTF-8''([^;\n\r]+)/);
-      if (m && m[1]) filename = decodeURIComponent(m[1]);
-      else {
-        const m2 = cd.match(/filename="?([^";]+)"?/);
-        if (m2 && m[1]) filename = m2[1];
-      }
-
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-          // allow toggles after a short grace period
-          try { setTimeout(() => { ignoreToggleRef.current = false; }, 600); } catch (e) {}
-      setTimeout(() => window.URL.revokeObjectURL(url), 10000);
-
-      showActionFeedback(Icons.PlayArrow, "تم التحميل");
-    } catch (err) {
-      console.error("Download error:", err);
-      const msg = err?.response?.data?.message || "فشل التحميل";
-      setError(msg);
-    } finally {
-      setIsDownloading(false);
-      setTimeout(() => setDownloadProgress(null), 800);
-    }
-  }, [video, currentQuality, user, isDownloading, showActionFeedback]);
-
-  // بدء الضغطة الطويلة
   const startLongPress = useCallback((type, position) => {
     if (type === 'pointer' && isTouchInput.current) {
       setLongPressState({
@@ -851,7 +739,6 @@ function VideoPlayer({ video = null }) {
     }
   }, [startDoubleSpeed, showControlsWithOptions]);
 
-  // إيقاف الضغطة الطويلة
   const stopLongPress = useCallback(() => {
     if (longPressState.active) {
       setLongPressState({
@@ -870,7 +757,6 @@ function VideoPlayer({ video = null }) {
     }
   }, [longPressState.active, stopDoubleSpeed, scheduleHideControls]);
 
-  // تهيئة الفيديو و HLS
   useEffect(() => {
     if (!video || !shouldInit) return;
 
@@ -883,7 +769,6 @@ function VideoPlayer({ video = null }) {
 
     const initPlayer = async () => {
       try {
-        // تحميل HLS.js ديناميكياً
         try {
           const mod = await import("hls.js");
           HlsModule = mod && (mod.default || mod);
@@ -892,7 +777,6 @@ function VideoPlayer({ video = null }) {
           console.warn("HLS.js not available:", e);
         }
 
-        // تحديد جودة الفيديو الافتراضية
         let defaultQuality = null;
         try {
           const saved = localStorage.getItem(`video-default-quality-${video._id}`);
@@ -938,15 +822,15 @@ function VideoPlayer({ video = null }) {
             },
           });
 
+
           hlsRef.current = hls;
-          // simple retry counter for transient playlist parsing/network errors
-          let hlsRetryAttempts = 0;
+          hlsErrorAttemptsRef.current = 0;
 
             hls.on(HlsModule.Events.MANIFEST_PARSED, () => {
-              // clear any previous transient error and mark ready
               setError(null);
               setShowErrorOverlay(false);
               setLoading(false);
+              hlsErrorAttemptsRef.current = 0; // إعادة تعيين عدد المحاولات عند نجاح التحميل
               if (errorTimerRef.current) {
                 try { clearTimeout(errorTimerRef.current); } catch (e) {}
                 errorTimerRef.current = null;
@@ -955,7 +839,6 @@ function VideoPlayer({ video = null }) {
                 try { clearTimeout(errorSetDelayRef.current); } catch (e) {}
                 errorSetDelayRef.current = null;
               }
-            // Apply saved/default quality once manifest (levels) are available
             try {
               if (defaultQuality) applyQualityToHls(hls, defaultQuality);
             } catch (e) {}
@@ -983,17 +866,16 @@ function VideoPlayer({ video = null }) {
 
           hls.on(HlsModule.Events.ERROR, (event, data) => {
             console.warn("HLS error:", data);
-            // If we received a fatal parsing/network error for the playlist, try one quick retry
             try {
               const details = data && (data.details || data.type || '');
               const isLevelParsing = details && String(details).toLowerCase().includes('levelparsing');
-              if (data && data.fatal && isLevelParsing && hlsRetryAttempts < 1) {
-                hlsRetryAttempts += 1;
-                console.debug && console.debug('HLS: levelParsingError detected — retrying loadSource (attempt)', hlsRetryAttempts);
+              // محاولتان فقط قبل إظهار الخطأ
+              if (data && data.fatal && isLevelParsing && hlsErrorAttemptsRef.current < 2) {
+                hlsErrorAttemptsRef.current += 1;
+                console.debug && console.debug('HLS: levelParsingError detected — retrying loadSource (attempt)', hlsErrorAttemptsRef.current);
                 setTimeout(() => {
                   try {
                     hls.loadSource(playlistUrl);
-                    // restart loading
                     try { hls.startLoad(); } catch (e) {}
                   } catch (e) {
                     console.warn('HLS retry failed:', e);
@@ -1007,21 +889,36 @@ function VideoPlayer({ video = null }) {
               let msg = "خطأ غير معروف";
               switch (data.type) {
                 case HlsModule.ErrorTypes.NETWORK_ERROR:
-                  msg = "خطأ في الشبكة";
+                  msg = "خطأ في الشبكة - تحقق من اتصالك بالإنترنت وحاول مرة أخرى";
                   break;
                 case HlsModule.ErrorTypes.MEDIA_ERROR:
-                  msg = "خطأ في الوسائط";
+                  // إذا كان الخطأ بسبب تغيير الجودة ولم نتجاوز محاولتين، حاول مرة أخرى
+                  if (qualityChangeAttemptsRef.current < 2) {
+                    qualityChangeAttemptsRef.current += 1;
+                    console.debug && console.debug('Quality change retry (attempt)', qualityChangeAttemptsRef.current);
+                    setTimeout(() => {
+                      if (hlsRef.current) {
+                        try {
+                          applyQualityToHls(hlsRef.current, currentQuality);
+                        } catch (e) {
+                          console.warn('Quality retry failed:', e);
+                        }
+                      }
+                    }, 800);
+                    return;
+                  }
+                  msg = "خطأ في الوسائط - قد يكون هناك مشكلة في الفيديو نفسه";
                   break;
                 default:
-                  msg = "خطأ غير معروف";
+                  msg = "خطأ في تشغيل البث - يرجى محاولة إعادة التحميل";
                   break;
               }
-              // debounce setting the visible error state to avoid brief transient
               if (errorSetDelayRef.current) {
                 try { clearTimeout(errorSetDelayRef.current); } catch (e) {}
                 errorSetDelayRef.current = null;
               }
               errorSetDelayRef.current = setTimeout(() => {
+                hlsErrorAttemptsRef.current += 1;
                 setError(msg);
                 setLoading(false);
                 errorSetDelayRef.current = null;
@@ -1032,14 +929,11 @@ function VideoPlayer({ video = null }) {
           hls.loadSource(playlistUrl);
           hls.attachMedia(videoRef.current);
         } else if (videoRef.current) {
-          // Only set src to an m3u8 if the browser supports HLS natively (e.g., Safari).
-          // Otherwise avoid assigning the .m3u8 URL directly which may trigger a download in some browsers.
           const v = videoRef.current;
           const canNativeHls = typeof v.canPlayType === "function" && (v.canPlayType('application/vnd.apple.mpegurl') || v.canPlayType('application/x-mpegURL'));
           if (canNativeHls) {
             v.src = playlistUrl;
             v.addEventListener("loadedmetadata", () => {
-              // clear transient errors when metadata arrives
               setError(null);
               setLoading(false);
               const serverDuration = (video && Number(video.duration)) || 0;
@@ -1060,18 +954,37 @@ function VideoPlayer({ video = null }) {
                 errorSetDelayRef.current = null;
               }
               errorSetDelayRef.current = setTimeout(() => {
-                setError("فشل التشغيل");
+                const mediaError = v?.error;
+                let errorMsg = "حدث خطأ في تشغيل الفيديو";
+                if (mediaError) {
+                  switch (mediaError.code) {
+                    case 1:
+                      errorMsg = "تم إلغاء تحميل الفيديو";
+                      break;
+                    case 2:
+                      errorMsg = "خطأ في الشبكة - تحقق من اتصالك بالإنترنت";
+                      break;
+                    case 3:
+                      errorMsg = "تم قطع تحميل الفيديو";
+                      break;
+                    case 4:
+                      errorMsg = "صيغة الفيديو غير مدعومة";
+                      break;
+                    default:
+                      errorMsg = "حدث خطأ في تشغيل الفيديو";
+                  }
+                }
+                setError(errorMsg);
                 setLoading(false);
                 errorSetDelayRef.current = null;
               }, 700);
             });
           } else {
             setLoading(false);
-            setError("متصفحك لا يدعم HLS. الرجاء استخدام متصفح يدعم HLS أو تمكين HLS.js.");
+            setError("متصفحك لا يدعم تشغيل هذا النوع من الفيديوهات. يرجى استخدام متصفح حديث أو تحديث متصفحك.");
           }
         }
 
-        // تحديث الوقت الحالي
         updateTime = () => {
           const v = videoRef.current;
           if (!v) return;
@@ -1095,7 +1008,6 @@ function VideoPlayer({ video = null }) {
           } catch (e) {}
         };
 
-        // حلقة تحديث سلسة
         let lastRafTs = 0;
         const rafLoop = (ts) => {
           if (!videoRef.current) return;
@@ -1108,7 +1020,6 @@ function VideoPlayer({ video = null }) {
         rafId = requestAnimationFrame(rafLoop);
         videoRef.current?.addEventListener("timeupdate", updateTime);
 
-        // استئناف موضع التشغيل المحفوظ
         try {
           const saved = localStorage.getItem(`video-pos-${video._id}`);
           if (saved) {
@@ -1120,7 +1031,6 @@ function VideoPlayer({ video = null }) {
           }
         } catch (e) {}
 
-        // حفظ الموضع كل 5 ثوان
         saveInt = setInterval(() => {
           try {
             if (videoRef.current && !isNaN(videoRef.current.currentTime)) {
@@ -1132,7 +1042,6 @@ function VideoPlayer({ video = null }) {
           } catch (e) {}
         }, 5000);
 
-        // تطبيق مستوى الصوت وسرعة التشغيل
         try {
           if (videoRef.current) {
             videoRef.current.volume = volume;
@@ -1140,18 +1049,16 @@ function VideoPlayer({ video = null }) {
           }
         } catch (e) {}
 
-        // إخفاء عناصر التحكم بعد 3 ثوان
         scheduleHideControls(3000);
       } catch (err) {
         console.error("Initialization error:", err);
-        setError("خطأ في تهيئة المشغل");
+        setError("حدث خطأ عند تحضير المشغل. يرجى محاولة إعادة تحميل الصفحة");
         setLoading(false);
       }
     };
 
     initPlayer();
 
-    // التنظيف
     return () => {
       if (hls) {
         try {
@@ -1175,7 +1082,6 @@ function VideoPlayer({ video = null }) {
     };
   }, [video, shouldInit, safePlay, clearHideControls, scheduleHideControls, applyQualityToHls]);
 
-  // معالجة أحداث pointer للتفاعلات
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -1187,7 +1093,6 @@ function VideoPlayer({ video = null }) {
       pointerTypeRef.current = e.pointerType;
       
       if (e.pointerType === 'touch') {
-        // إعداد للجوال
         setInteractionState(prev => ({
           ...prev,
           isTouchInteraction: true,
@@ -1195,13 +1100,10 @@ function VideoPlayer({ video = null }) {
           pendingTap: true
         }));
         
-        // don't start long-press if the touch began on a control button
         try {
           if (!e.target || !e.target.closest || e.target.closest('.controls-button')) {
-            // allow taps on controls to proceed immediately; no long-press timer
             longPressTimer = null;
           } else {
-            // بدء مؤقت الضغطة الطويلة
             longPressTimer = setTimeout(() => {
               startLongPress('pointer', { x: e.clientX, y: e.clientY });
             }, LONG_PRESS_THRESHOLD);
@@ -1212,7 +1114,6 @@ function VideoPlayer({ video = null }) {
           }, LONG_PRESS_THRESHOLD);
         }
         
-        // مؤقت النقر القصير
         tapTimer = setTimeout(() => {
           setInteractionState(prev => ({
             ...prev,
@@ -1221,7 +1122,6 @@ function VideoPlayer({ video = null }) {
         }, MOBILE_TAP_TIMEOUT);
         
       } else if (e.pointerType === 'mouse') {
-        // إعداد لسطح المكتب
         setInteractionState(prev => ({
           ...prev,
           isMouseInteraction: true,
@@ -1235,35 +1135,28 @@ function VideoPlayer({ video = null }) {
     
     const handlePointerMove = (e) => {
       if (e.pointerType === 'mouse') {
-        // حركة الفأرة تظهر التحكم على سطح المكتب
         showControlsWithOptions({ immediate: true });
       }
     };
     
     const handlePointerUp = (e) => {
-      // إلغاء المؤقتات
       if (longPressTimer) clearTimeout(longPressTimer);
       if (tapTimer) clearTimeout(tapTimer);
       
       if (longPressState.active) {
-        // إيقاف الضغطة الطويلة النشطة
         e.preventDefault();
         e.stopPropagation();
         stopLongPress();
       } else if (e.pointerType === 'touch' && interactionState.pendingTap) {
-        // نقر عادي على الجوال
         try {
-          // If the tap targeted a control button, allow its click handler to run immediately
           const btn = e.target && e.target.closest && e.target.closest('.controls-button');
           if (btn) {
-            // ensure controls visible and don't intercept the click
             setShowControls(true);
             scheduleHideControls(MOBILE_HIDE_TIMEOUT);
             setInteractionState(prev => ({ ...prev, pendingTap: false }));
             return;
           }
 
-          // If controls are hidden and the tap is within the center play area, trigger immediate play
           if (!showControls) {
             try {
               if (centerPlayRef.current) {
@@ -1285,7 +1178,6 @@ function VideoPlayer({ video = null }) {
             } catch (e) {}
           }
 
-          // default: reveal or hide controls (don't block propagation for controls)
           try { e.preventDefault(); e.stopPropagation(); } catch (ee) {}
           setShowControls(prev => {
             const next = !prev;
@@ -1296,8 +1188,6 @@ function VideoPlayer({ video = null }) {
           });
         } catch (err) {}
       } else if (e.pointerType === 'mouse') {
-        // على سطح المكتب لا نبدّل التشغيل عند النقر في منطقة فارغة
-        // تفاعل أزرار التشغيل يتم عبر أزرار بعلامة `controls-button` وتستجيب فورًا
       }
       
       setInteractionState(prev => ({
@@ -1308,9 +1198,7 @@ function VideoPlayer({ video = null }) {
     
     const handleDoubleClick = (e) => {
       if (pointerTypeRef.current === 'mouse') {
-        // ignore double-clicks that target controls
         if (e.target && e.target.closest && e.target.closest('.controls-button')) return;
-        // otherwise only toggle fullscreen when dblclicking the video/container area
         if (e.target === videoRef.current || e.target === container) {
           e.preventDefault();
           toggleFullscreen();
@@ -1343,7 +1231,90 @@ function VideoPlayer({ video = null }) {
     scheduleHideControls
   ]);
   
-  // إدارة الضغطة الطويلة بمسطرة المسافة
+  // Touch long-press handlers for empty space (mobile)
+  const handleTouchStart = useCallback((e) => {
+    try {
+      if (!isTouchInput.current) return;
+      
+      const target = e.target;
+      const isControlsElement = target.closest('button') || 
+                                target.closest('[role="button"]') || 
+                                target.closest('input') || 
+                                target.closest('[role="slider"]') ||
+                                target !== videoRef.current;
+      
+      if (isControlsElement) return;
+      
+      const touch = e.touches[0];
+      const touchStartTime = Date.now();
+      
+      // Start long-press timer
+      const timer = setTimeout(() => {
+        try {
+          // Long-press detected - start double speed
+          startDoubleSpeed();
+          showControlsWithOptions({ immediate: true, extendTimeout: false });
+          
+          // Show haptic feedback
+          if ('vibrate' in navigator) {
+            try {
+              navigator.vibrate(50); // Short haptic feedback
+            } catch (vibErr) {}
+          }
+          
+          pointerLongActiveRef.current = true;
+        } catch (err) {}
+      }, LONG_PRESS_THRESHOLD);
+      
+      // Store timer in ref for cleanup
+      pointerLongPressTimerRef.current = {
+        timer,
+        startTime: touchStartTime,
+        startX: touch.clientX,
+        startY: touch.clientY
+      };
+    } catch (err) {}
+  }, [startDoubleSpeed, showControlsWithOptions]);
+
+  const handleTouchMove = useCallback((e) => {
+    try {
+      if (!pointerLongPressTimerRef.current) return;
+      
+      const touch = e.touches[0];
+      const { startX, startY } = pointerLongPressTimerRef.current;
+      
+      // Check if moved too much (cancel long-press)
+      const dx = Math.abs(touch.clientX - startX);
+      const dy = Math.abs(touch.clientY - startY);
+      const threshold = 15; // pixels
+      
+      if (dx > threshold || dy > threshold) {
+        clearTimeout(pointerLongPressTimerRef.current.timer);
+        pointerLongPressTimerRef.current = null;
+        
+        if (pointerLongActiveRef.current) {
+          stopDoubleSpeed();
+          pointerLongActiveRef.current = false;
+        }
+      }
+    } catch (err) {}
+  }, [stopDoubleSpeed]);
+
+  const handleTouchEnd = useCallback((e) => {
+    try {
+      if (pointerLongPressTimerRef.current) {
+        clearTimeout(pointerLongPressTimerRef.current.timer);
+        pointerLongPressTimerRef.current = null;
+      }
+      
+      if (pointerLongActiveRef.current) {
+        stopDoubleSpeed();
+        pointerLongActiveRef.current = false;
+        scheduleHideControls(1000);
+      }
+    } catch (err) {}
+  }, [stopDoubleSpeed, scheduleHideControls]);
+
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (e.code === 'Space') {
@@ -1352,14 +1323,12 @@ function VideoPlayer({ video = null }) {
         if (isTouchInput.current) return;
         
         if (e.repeat) {
-          // الضغطة الطويلة على سطح المكتب
           if (!spaceLongActiveRef.current) {
             spaceLongActiveRef.current = true;
             startDoubleSpeed();
             showControlsWithOptions({ immediate: true, extendTimeout: false });
           }
         } else {
-          // النقر القصير
           togglePlayPause();
         }
       }
@@ -1382,7 +1351,6 @@ function VideoPlayer({ video = null }) {
     };
   }, [togglePlayPause, startDoubleSpeed, stopDoubleSpeed, showControlsWithOptions, scheduleHideControls]);
 
-  // التحكم في إظهار/إخفاء عناصر التحكم
   useEffect(() => {
     if (showControls) {
       scheduleHideControls();
@@ -1392,15 +1360,13 @@ function VideoPlayer({ video = null }) {
     return () => clearHideControls();
   }, [showControls, qualityMenuOpen, speedMenuOpen, settingsMenuOpen, scheduleHideControls, clearHideControls]);
 
-  // Delay showing error overlay — only show if still not playing after debounce
   useEffect(() => {
     if (error) {
-      // reset overlay visibility then show after longer delay only if not playing
       setShowErrorOverlay(false);
       if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
       errorTimerRef.current = setTimeout(() => {
         try {
-          if (!isPlaying && error) setShowErrorOverlay(true);
+          if (error) setShowErrorOverlay(true);
         } catch (e) {}
       }, 1200);
     } else {
@@ -1418,7 +1384,6 @@ function VideoPlayer({ video = null }) {
     };
   }, [error, isPlaying]);
 
-  // clear any pending debounced error timer on unmount
   useEffect(() => {
     return () => {
       if (errorSetDelayRef.current) {
@@ -1428,7 +1393,6 @@ function VideoPlayer({ video = null }) {
     };
   }, []);
 
-  // compute an estimated bottom inset for fullscreen on mobile
   useEffect(() => {
     if (!isFullscreen) {
       setFullscreenBottomInset(0);
@@ -1440,7 +1404,6 @@ function VideoPlayer({ video = null }) {
         const inset = Math.max(0, window.innerHeight - vvh) || 0;
         setFullscreenBottomInset(inset);
 
-        // ensure the fullscreen container fills the visible viewport height
         try {
           const container = containerRef.current;
           if (container) {
@@ -1469,7 +1432,6 @@ function VideoPlayer({ video = null }) {
       if (window.visualViewport && window.visualViewport.removeEventListener) {
         window.visualViewport.removeEventListener("resize", computeInset);
       }
-      // cleanup container styles on exit
       try {
         const container = containerRef.current;
         if (container) {
@@ -1480,7 +1442,6 @@ function VideoPlayer({ video = null }) {
     };
   }, [isFullscreen]);
 
-  // مزامنة مستوى الصوت
   useEffect(() => {
     try {
       if (videoRef.current) videoRef.current.volume = volume;
@@ -1491,7 +1452,6 @@ function VideoPlayer({ video = null }) {
     }
   }, [volume]);
 
-  // مزامنة سرعة التشغيل
   useEffect(() => {
     try {
       if (videoRef.current) videoRef.current.playbackRate = playbackRate;
@@ -1501,13 +1461,11 @@ function VideoPlayer({ video = null }) {
     }
   }, [playbackRate]);
 
-  // معالجة اختصارات لوحة المفاتيح الإضافية
   useEffect(() => {
     const onKey = (e) => {
       if (!videoRef.current) return;
       const v = videoRef.current;
       
-      // معالجة مسطرة المسافة تمت في useEffect منفصل
       if (e.code === 'Space') return;
       
       switch (e.code) {
@@ -1563,86 +1521,36 @@ function VideoPlayer({ video = null }) {
 
     window.addEventListener("keydown", onKey);
     
-    // استجابة لتغيير وضع ملء الشاشة
     const handleFullscreenChange = () => {
       const isFs = !!document.fullscreenElement;
 
-      // mark that we're in a transition to suppress transient 'waiting' events
       try {
         fullscreenTransitionRef.current = true;
+        
+        // تعطيل freeze الفيديو تماماً - لا نحفظ ولا نعيد التشغيل
         if (hlsFreezeTimeoutRef.current) {
           clearTimeout(hlsFreezeTimeoutRef.current);
           hlsFreezeTimeoutRef.current = null;
         }
-
-        // Preserve current playback state so we can restore if browser
-        // briefly interrupts playback during the FS transition.
-        try {
-          const v = videoRef.current;
-          if (v) {
-            savedPosRef.current = v.currentTime || 0;
-            wasPlayingRef.current = !v.paused && !v.ended;
-          }
-        } catch (e) {}
-
-        // If using HLS.js, freeze automatic level switching during the
-        // transition to avoid immediate ABR changes that cause buffering.
-        try {
-          const hls = hlsRef.current;
-          if (hls && typeof hls.currentLevel !== 'undefined') {
-            prevHlsLevelRef.current = hls.currentLevel;
-            try { hls.autoLevelEnabled = false; } catch (e) {}
-            try { if (prevHlsLevelRef.current >= 0) hls.currentLevel = prevHlsLevelRef.current; } catch (e) {}
-            try { if (prevHlsLevelRef.current >= 0) hls.nextLevel = prevHlsLevelRef.current; } catch (e) {}
-          }
-        } catch (e) {}
-
-        // end transition flag after a short grace period
-        setTimeout(() => {
-          try { fullscreenTransitionRef.current = false; } catch (e) {}
-        }, 700);
       } catch (e) {}
 
       setIsFullscreen(isFs);
       setShowControls(true);
       clearHideControls();
 
-      // after the fullscreen transition settle, restore HLS ABR and
-      // playback position/state
-      hlsFreezeTimeoutRef.current = setTimeout(() => {
-        try {
-          const hls = hlsRef.current;
-          if (hls) {
-            try { if (typeof prevHlsLevelRef.current !== 'undefined' && prevHlsLevelRef.current !== null) {
-              try { hls.currentLevel = prevHlsLevelRef.current; } catch (e) {}
-              try { hls.nextLevel = prevHlsLevelRef.current; } catch (e) {}
-            } } catch (e) {}
-            try { hls.autoLevelEnabled = true; } catch (e) {}
-          }
-        } catch (e) {}
+      // إنهاء الانتقال بعد وقت كافٍ لتجنب إعادة تحميل البث
+      setTimeout(() => {
+        try { fullscreenTransitionRef.current = false; } catch (e) {}
+      }, 300);
 
-        try {
-          const v = videoRef.current;
-          if (v && savedPosRef.current != null && !isNaN(savedPosRef.current)) {
-            try { v.currentTime = savedPosRef.current; } catch (e) {}
-          }
-          if (v && wasPlayingRef.current) {
-            try { v.play(); } catch (e) {}
-          }
-        } catch (e) {}
-
-        prevHlsLevelRef.current = null;
-        hlsFreezeTimeoutRef.current = null;
-
-        if (!isFs) {
-          setTimeout(updateVideoSizing, 100);
-          scheduleHideControls(3000);
-        }
-      }, 600);
+      // تحديث حجم الفيديو فقط عند الخروج من ملء الشاشة
+      if (!isFs) {
+        setTimeout(updateVideoSizing, 50);
+        scheduleHideControls(3000);
+      }
     };
     document.addEventListener("fullscreenchange", handleFullscreenChange);
 
-    // Media Session API
     if ("mediaSession" in navigator && video) {
       try {
         navigator.mediaSession.metadata = new window.MediaMetadata({
@@ -1680,7 +1588,6 @@ function VideoPlayer({ video = null }) {
     };
   }, [video, togglePlayPause, toggleFullscreen, safePlay, scheduleHideControls, showActionFeedbackPos, clearHideControls, updateVideoSizing]);
 
-  // cleanup any transient feedback timers on unmount
   useEffect(() => {
     return () => {
       try {
@@ -1690,7 +1597,6 @@ function VideoPlayer({ video = null }) {
     };
   }, []);
 
-  // keep controls visible while a long-press is active
   useEffect(() => {
     try {
       if (isLongPressActive || longPressState.active || spaceLongActiveRef.current) {
@@ -1700,7 +1606,6 @@ function VideoPlayer({ video = null }) {
     } catch (e) {}
   }, [isLongPressActive, longPressState.active, clearHideControls]);
 
-  // مزامنة حالة التشغيل
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
@@ -1714,10 +1619,29 @@ function VideoPlayer({ video = null }) {
     };
   }, []);
 
-  // إغلاق القوائم عند النقر خارجها
   useEffect(() => {
     const onDocClick = (e) => {
       if (ignoreDocClickRef.current) return;
+      
+      // Close menus if clicking outside in fullscreen mode
+      if (isFullscreen) {
+        // Check if click is on a menu or button
+        if (qualityMenuOpen && qualityRef.current && !qualityRef.current.contains(e.target)) {
+          setQualityMenuOpen(false);
+        }
+        if (speedMenuOpen && speedRef.current && !speedRef.current.contains(e.target)) {
+          setSpeedMenuOpen(false);
+        }
+        if (settingsMenuOpen) {
+          const clickedInsideButton = settingsRef.current && settingsRef.current.contains(e.target);
+          const clickedInsideMenu = settingsMenuRef.current && settingsMenuRef.current.contains(e.target);
+          if (!clickedInsideButton && !clickedInsideMenu) {
+            setSettingsMenuOpen(false);
+          }
+        }
+        return;
+      }
+      
       if (qualityMenuOpen && qualityRef.current && !qualityRef.current.contains(e.target)) {
         setQualityMenuOpen(false);
       }
@@ -1745,13 +1669,11 @@ function VideoPlayer({ video = null }) {
       document.removeEventListener("click", onDocClick);
       document.removeEventListener("keydown", onEsc);
     };
-  }, [qualityMenuOpen, speedMenuOpen, settingsMenuOpen]);
+  }, [qualityMenuOpen, speedMenuOpen, settingsMenuOpen, isFullscreen]);
 
-  // Close the small fixed settings menu on scroll/resize to avoid misplaced popovers
   useEffect(() => {
     if (!settingsMenuOpen) return;
     const onClose = (e) => {
-      // ignore scrolls/resize that originate from inside the settings menu
       try {
         if (e && e.target) {
           if (settingsRef.current && settingsRef.current.contains(e.target)) return;
@@ -1762,7 +1684,6 @@ function VideoPlayer({ video = null }) {
       setSettingsMenuPos(null);
     };
     window.addEventListener('resize', onClose);
-    // use capture to catch scrolls early but ignore those originating inside the menu
     window.addEventListener('scroll', onClose, true);
     return () => {
       window.removeEventListener('resize', onClose);
@@ -1770,15 +1691,19 @@ function VideoPlayer({ video = null }) {
     };
   }, [settingsMenuOpen]);
 
-  // تحديث أبعاد الفيديو عند تغيير الجودة أو وضع ملء الشاشة
   useEffect(() => {
     updateVideoSizing();
+  }, [updateVideoSizing]);
+
+  useEffect(() => {
+    // تخطي تطبيق الجودة أثناء الانتقال بين أوضاع العرض
+    if (fullscreenTransitionRef.current) return;
+    
     if (hlsRef.current && currentQuality) {
       applyQualityToHls(hlsRef.current, currentQuality);
     }
-  }, [currentQuality, isFullscreen, updateVideoSizing, applyQualityToHls]);
+  }, [currentQuality, applyQualityToHls]);
 
-  // تحديث أبعاد الفيديو عند تغيير حجم النافذة
   useEffect(() => {
     const handleResize = () => {
       updateVideoSizing();
@@ -1787,7 +1712,6 @@ function VideoPlayer({ video = null }) {
     return () => window.removeEventListener("resize", handleResize);
   }, [updateVideoSizing]);
 
-  // أيقونات SVG مع تصميم محسّن
   const Icons = {
     Play: () => (
       <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
@@ -1873,31 +1797,50 @@ function VideoPlayer({ video = null }) {
         <path d="M9 16h2V8H9v8zm3-14C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm1-4h2V8h-2v8z" />
       </svg>
     ),
-    Download: () => (
-      <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <path d="M12 2v8m0 0l3-3m-3 3l-3-3" strokeLinecap="round" strokeLinejoin="round" />
-        <path d="M4 12v6a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6" strokeLinecap="round" />
-      </svg>
-    ),
   };
 
   const progressPct = duration ? (currentTime / duration) * 100 : 0;
 
   return (
-    <div className="space-y-2 relative">
+    <div className="video-player-wrapper relative w-full">
       <div
-        className={`relative w-full bg-gradient-to-br from-gray-900 via-gray-950 to-black rounded-2xl 
-          ${isFullscreen ? "fixed inset-0 z-50 rounded-none overflow-visible" : "aspect-video max-h-[70vh] shadow-2xl overflow-hidden"} ${showControls ? "" : "cursor-none"}`}
+        className={`video-player-container relative w-full bg-gradient-to-br from-gray-900 via-gray-950 to-black overflow-hidden ${
+          isFullscreen 
+            ? "fixed inset-0 z-50" 
+            : "aspect-video max-h-[70vh] shadow-2xl rounded-2xl"
+        } ${showControls ? "" : "cursor-none"}`}
         ref={containerRef}
-        style={isFullscreen ? { paddingBottom: `calc(env(safe-area-inset-bottom, 0px) + 1.5rem + ${fullscreenBottomInset}px)` } : undefined}
+        style={isFullscreen ? { 
+          paddingTop: 'env(safe-area-inset-top, 0px)',
+          paddingBottom: `calc(env(safe-area-inset-bottom, 0px) + ${fullscreenBottomInset}px)`,
+          paddingLeft: 'env(safe-area-inset-left, 0px)',
+          paddingRight: 'env(safe-area-inset-right, 0px)'
+        } : undefined}
         onClick={(e) => {
           try {
+            if (isFullscreen) {
+              e.stopPropagation();
+              const target = e.target;
+              
+              if (target !== videoRef.current && 
+                  (target.closest('button') || target.closest('[role="button"]') || 
+                   target.closest('[role="slider"]') || target.closest('input'))) {
+                return;
+              }
+              
+              if (!showControls) {
+                setShowControls(true);
+                scheduleHideControls(3000);
+              } else {
+                setShowControls(false);
+              }
+              return;
+            }
+
             const cx = e.clientX;
             const cy = e.clientY;
 
-            // If controls are hidden, allow clicking the area where the center play or fullscreen buttons appear
             if (!showControls) {
-              // center-area detection: expand hitbox slightly for easier tapping on mobile
               if (centerPlayRef.current) {
                 const r = centerPlayRef.current.getBoundingClientRect();
                 const PAD = Math.min(40, Math.max(12, Math.round(Math.min(r.width, r.height) * 0.25)));
@@ -1906,7 +1849,6 @@ function VideoPlayer({ video = null }) {
                 const top = r.top - PAD;
                 const bottom = r.bottom + PAD;
                 if (cx >= left && cx <= right && cy >= top && cy <= bottom) {
-                  // immediate play on center tap (bypass suppression heuristics)
                   togglePlayPauseImmediate();
                   return;
                 }
@@ -1922,19 +1864,16 @@ function VideoPlayer({ video = null }) {
                 }
               }
 
-              // other empty-area taps should NOT toggle playback — just reveal controls
               setShowControls(true);
               scheduleHideControls(3000);
               return;
             }
 
-            // ignore clicks that immediately follow a pointer long-press (but only after center logic above)
             if (pointerLongSuppressClickRef.current) {
               try { pointerLongSuppressClickRef.current = false; } catch (e) {}
               return;
             }
 
-            // otherwise toggle controls if clicking on the video element
             if (e.target === videoRef.current) {
               setShowControls((prev) => {
                 const next = !prev;
@@ -1948,6 +1887,9 @@ function VideoPlayer({ video = null }) {
           if (hideControlsTimeoutRef.current) clearTimeout(hideControlsTimeoutRef.current);
           hideControlsTimeoutRef.current = setTimeout(() => setShowControls(false), 3000);
         }}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
       >
         <video
           ref={videoRef}
@@ -1962,6 +1904,7 @@ function VideoPlayer({ video = null }) {
           preload="metadata"
           onWaiting={() => {
             try {
+              // تجاهل loading أثناء الانتقال بين أوضاع العرض
               if (fullscreenTransitionRef.current) return;
             } catch (e) {}
             setLoading(true);
@@ -1975,35 +1918,32 @@ function VideoPlayer({ video = null }) {
               setLoading(false);
             } catch (err) {}
           }}
-          className="video-player"
+          className="video-player w-full h-full object-contain"
         ></video>
 
-        {/* Title overlay shown on the video when controls are visible */}
         {video?.title && (
           <div
-            className={`absolute left-4 right-4 top-4 z-50 transition-all duration-300 transform ${showControls ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-4 pointer-events-none"}`}
+            className={`video-title-overlay absolute left-2 xs:left-3 sm:left-4 right-2 xs:right-3 sm:right-4 top-2 xs:top-3 sm:top-4 z-50 transition-all duration-300 transform ${
+              showControls ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-4 pointer-events-none"
+            }`}
             style={isFullscreen ? { top: `calc(env(safe-area-inset-top, 0px) + 1rem)` } : undefined}
           >
-            <div className="mx-auto max-w-full bg-gradient-to-r from-black/70 via-black/50 to-transparent backdrop-blur-lg text-white/95 rounded-xl px-4 py-3 text-sm sm:text-base font-bold truncate shadow-2xl border border-white/10">
-              <div className="flex items-center gap-2">
-                <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
+            <div className="mx-auto max-w-full bg-gradient-to-r from-black/70 via-black/50 to-transparent backdrop-blur-lg text-white/95 rounded-lg xs:rounded-xl sm:rounded-xl px-2.5 xs:px-3 sm:px-4 py-1.5 xs:py-2 sm:py-3 text-xs xs:text-sm sm:text-base font-bold truncate shadow-2xl border border-white/10">
+              <div className="flex items-center gap-1.5 xs:gap-2">
+                <div className="w-1.5 h-1.5 xs:w-2 xs:h-2 bg-red-500 rounded-full animate-pulse flex-shrink-0"></div>
                 {video.title}
               </div>
             </div>
           </div>
         )}
 
-        {/* overlay that intercepts clicks during pending/active long-press */}
         {(isPendingLongPress || isLongPressActive) && (
           <div className="absolute inset-0 z-[100000] bg-gradient-to-br from-red-500/5 to-cyan-500/5" style={{ pointerEvents: 'auto' }} />
         )}
 
-        {/* مؤشر التحميل: تم نقله داخل زر التشغيل المركزي لعدم تكرار الواجهات */}
-
-        {/* ردود الفعل المرئية */}
         {actionFeedback.visible && actionFeedback.position === 'center' && (
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-40">
-            <div className="flex flex-col items-center gap-3 bg-gradient-to-br from-black/70 to-gray-900/70 text-white/95 px-6 py-4 rounded-2xl backdrop-blur-xl border border-white/20 shadow-2xl animate-scale-in">
+          <div className="hidden sm:flex absolute inset-0 items-center justify-center pointer-events-none z-40">
+            <div className="feedback-center flex flex-col items-center gap-3 bg-gradient-to-br from-black/70 to-gray-900/70 text-white/95 px-6 py-4 rounded-2xl backdrop-blur-xl border border-white/20 shadow-2xl animate-scale-in">
               <div className="text-4xl bg-gradient-to-r from-red-500 to-cyan-500 bg-clip-text text-transparent">
                 {actionFeedback.icon ? actionFeedback.icon() : null}
               </div>
@@ -2013,16 +1953,16 @@ function VideoPlayer({ video = null }) {
         )}
 
         {actionFeedback.visible && actionFeedback.position === 'top' && (
-          <div className="absolute left-1/2 transform -translate-x-1/2 pointer-events-none z-50" style={{ top: '25%' }}>
-            <div className="flex flex-col items-center gap-2 bg-gradient-to-br from-black/70 to-gray-900/70 text-white/95 px-4 py-3 rounded-xl backdrop-blur-xl border border-white/20 shadow-2xl animate-scale-in">
-              <div className="text-3xl">{actionFeedback.icon ? actionFeedback.icon() : null}</div>
-              <div className="text-sm font-bold tracking-wide">{actionFeedback.text}</div>
+          <div className="feedback-top absolute left-1/2 transform -translate-x-1/2 pointer-events-none z-50" style={{ top: isTouchInput.current ? 'auto' : '25%', bottom: isTouchInput.current ? '6rem' : 'auto' }}>
+            <div className="flex flex-col items-center gap-1 xs:gap-1.5 sm:gap-2 bg-gradient-to-br from-black/70 to-gray-900/70 text-white/95 px-2 xs:px-3 sm:px-4 py-1.5 xs:py-2 sm:py-3 rounded-lg xs:rounded-xl sm:rounded-xl backdrop-blur-xl border border-white/20 shadow-2xl animate-scale-in">
+              <div className="text-xl xs:text-2xl sm:text-3xl">{actionFeedback.icon ? actionFeedback.icon() : null}</div>
+              <div className="text-xs xs:text-xs sm:text-sm font-bold tracking-wide">{actionFeedback.text}</div>
             </div>
           </div>
         )}
 
         {actionFeedback.visible && actionFeedback.position === 'left' && (
-          <div className="absolute top-1/2 left-8 transform -translate-y-1/2 pointer-events-none z-40 animate-slide-in-left">
+          <div className="hidden sm:block feedback-left absolute top-1/2 left-8 transform -translate-y-1/2 pointer-events-none z-40 animate-slide-in-left">
             <div className="flex flex-col items-center gap-2 bg-gradient-to-br from-black/70 to-gray-900/70 text-white/95 px-4 py-3 rounded-xl backdrop-blur-xl border border-white/20 shadow-2xl">
               <div className="text-3xl">{actionFeedback.icon ? actionFeedback.icon() : null}</div>
               <div className="text-sm font-bold tracking-wide">{actionFeedback.text}</div>
@@ -2031,7 +1971,7 @@ function VideoPlayer({ video = null }) {
         )}
 
         {actionFeedback.visible && actionFeedback.position === 'right' && (
-          <div className="absolute top-1/2 right-8 transform -translate-y-1/2 pointer-events-none z-40 animate-slide-in-right">
+          <div className="hidden sm:block feedback-right absolute top-1/2 right-8 transform -translate-y-1/2 pointer-events-none z-40 animate-slide-in-right">
             <div className="flex flex-col items-center gap-2 bg-gradient-to-br from-black/70 to-gray-900/70 text-white/95 px-4 py-3 rounded-xl backdrop-blur-xl border border-white/20 shadow-2xl">
               <div className="text-3xl">{actionFeedback.icon ? actionFeedback.icon() : null}</div>
               <div className="text-sm font-bold tracking-wide">{actionFeedback.text}</div>
@@ -2040,7 +1980,7 @@ function VideoPlayer({ video = null }) {
         )}
 
         {seekFeedback.visible && !actionFeedback.visible && (
-          <div className={`absolute top-1/2 transform -translate-y-1/2 ${seekFeedback.type === "forward" ? "right-8" : "left-8"} pointer-events-none z-40 animate-slide-in-${seekFeedback.type === "forward" ? "right" : "left"}`}>
+          <div className={`seek-feedback absolute top-1/2 transform -translate-y-1/2 ${seekFeedback.type === "forward" ? "right-8" : "left-8"} pointer-events-none z-40 animate-slide-in-${seekFeedback.type === "forward" ? "right" : "left"}`}>
             <div className="flex flex-col items-center gap-2 bg-gradient-to-br from-black/70 to-gray-900/70 text-white/95 px-4 py-3 rounded-xl backdrop-blur-xl border border-white/20 shadow-2xl">
               <div className="text-3xl">
                 {seekFeedback.type === "forward" ? <Icons.Forward10 /> : <Icons.Replay10 />}
@@ -2051,7 +1991,7 @@ function VideoPlayer({ video = null }) {
         )}
 
         {rateFeedback.visible && !actionFeedback.visible && (
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-40">
+          <div className="hidden sm:flex rate-feedback absolute inset-0 items-center justify-center pointer-events-none z-40">
             <div className="flex flex-col items-center gap-2 bg-gradient-to-br from-black/70 to-gray-900/70 text-white/95 px-6 py-4 rounded-2xl backdrop-blur-xl border border-white/20 shadow-2xl animate-scale-in">
               <div className="text-3xl font-bold bg-gradient-to-r from-red-500 to-cyan-500 bg-clip-text text-transparent">{rateFeedback.rate}x</div>
               <div className="text-sm font-medium opacity-80">سرعة التشغيل</div>
@@ -2059,72 +1999,45 @@ function VideoPlayer({ video = null }) {
           </div>
         )}
 
-        {volumeFeedback.visible && !actionFeedback.visible && (
-          <div className="absolute left-1/2 transform -translate-x-1/2 z-40 pointer-events-none animate-slide-in-top" style={{ top: '6%' }}>
-            <div className="flex flex-col items-center gap-1 bg-gradient-to-br from-black/70 to-gray-900/70 text-white/95 px-4 py-3 rounded-xl backdrop-blur-xl border border-white/20 shadow-2xl">
-              <div className="text-sm opacity-80">مستوى الصوت</div>
-              <div className="text-2xl font-bold bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">{volumeFeedback.volume}%</div>
-              <div className="w-32 h-2 bg-gray-700 rounded-full overflow-hidden mt-1">
-                <div 
-                  className="h-full bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full transition-all duration-300"
-                  style={{ width: `${volumeFeedback.volume}%` }}
-                />
-              </div>
-            </div>
-          </div>
-        )}
 
-        {/* تقدم التحميل */}
-        {isDownloading && downloadProgress != null && (
-          <div
-            className="absolute left-1/2 -translate-x-1/2 bottom-4 z-40 pointer-events-none w-2/5 animate-pulse"
-            style={isFullscreen ? { bottom: `calc(1rem + env(safe-area-inset-bottom) + ${fullscreenBottomInset}px)` } : undefined}
-          >
-            <div className="w-full h-2.5 bg-white/20 rounded-full overflow-hidden shadow-inner">
-              <div
-                className="h-full bg-gradient-to-r from-cyan-500 via-blue-500 to-purple-500 rounded-full transition-all duration-300 shadow-lg"
-                style={{ width: `${downloadProgress}%` }}
-              />
-            </div>
-            <div className="text-center mt-2 text-sm font-bold text-white/90 tracking-wide">
-              جاري التحميل {downloadProgress}%
-            </div>
-          </div>
-        )}
 
-        {/* رسالة الخطأ */}
         {error && showErrorOverlay && (
-          <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-black/95 via-gray-900/95 to-black/95 backdrop-blur-xl animate-fade-in" style={{ zIndex: 2147483647, pointerEvents: 'auto' }}>
-            <div className="text-center p-8 bg-gradient-to-br from-gray-900 to-black rounded-3xl max-w-sm border border-white/10 shadow-2xl">
-              <div className="text-red-400 text-2xl mb-4 font-bold flex items-center justify-center gap-3">
-                <span className="text-3xl animate-pulse">⚠️</span> 
-                <span className="bg-gradient-to-r from-red-400 to-orange-400 bg-clip-text text-transparent">{error}</span>
+          <div className="error-overlay absolute inset-0 flex items-center justify-center bg-gradient-to-br from-black/95 via-gray-900/95 to-black/95 backdrop-blur-xl animate-fade-in" style={{ zIndex: 2147483647, pointerEvents: 'auto' }}>
+            <div className="text-center p-2 xs:p-3 sm:p-6 lg:p-8 bg-gradient-to-br from-red-900/30 to-gray-900 rounded-lg xs:rounded-2xl sm:rounded-3xl max-w-xs xs:max-w-sm border border-red-600/40 shadow-2xl">
+              <div className="text-red-300 text-lg xs:text-2xl sm:text-3xl mb-2 xs:mb-3 sm:mb-6 font-bold flex items-center justify-center gap-1 xs:gap-2 sm:gap-3">
+                <span className="text-2xl xs:text-3xl sm:text-4xl animate-pulse">⚠️</span> 
               </div>
+              <h2 className="text-white text-sm xs:text-lg sm:text-xl font-bold mb-1 xs:mb-2 sm:mb-3">حدث خطأ</h2>
+              <p className="text-red-200 text-xs xs:text-sm sm:text-base mb-3 xs:mb-4 sm:mb-6 leading-relaxed">
+                {error}
+              </p>
               <button
                 onClick={retryPlayback}
-                className="px-8 py-3.5 bg-gradient-to-r from-red-600 via-orange-500 to-red-700 text-white rounded-xl transition-all duration-300 shadow-lg hover:shadow-red-500/25 hover:scale-105 active:scale-95 font-bold text-lg"
+                className="w-full px-3 xs:px-4 sm:px-6 py-1.5 xs:py-2 sm:py-3 bg-gradient-to-r from-red-600 via-orange-500 to-red-700 text-white rounded-md xs:rounded-lg sm:rounded-xl transition-all duration-300 shadow-lg hover:shadow-red-500/25 active:scale-95 font-bold text-xs xs:text-sm sm:text-base"
               >
-                إعادة المحاولة
+                🔄 إعادة المحاولة
               </button>
+              <p className="text-white/50 text-xs mt-2 xs:mt-3 sm:mt-4">
+                إذا استمرت المشكلة، جدد الصفحة
+              </p>
             </div>
           </div>
         )}
 
-        {/* عناصر التحكم المركزية */}
         {showControls && (
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-[99999] animate-fade-in">
-            <div className="flex items-center gap-4 sm:gap-6 md:gap-8 pointer-events-auto">
+          <div className="center-controls absolute inset-0 flex items-center justify-center pointer-events-none z-[99999] animate-fade-in">
+            <div className="flex items-center gap-1 xs:gap-2 sm:gap-3 md:gap-5 lg:gap-8 pointer-events-auto">
               <button
                 type="button"
                 aria-label="تأخير 5 ث"
-                  onClick={() => {
+                onClick={() => {
                   const v = videoRef.current;
                   if (!v) return;
                   v.currentTime = Math.max(0, (v.currentTime || 0) - 5);
                   setCurrentTime(v.currentTime);
                   showActionFeedbackPos(Icons.Replay10, "-5s", 800, 'left');
                 }}
-                className="controls-button flex items-center justify-center w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-gradient-to-br from-gray-900/80 to-black/80 text-white shadow-2xl transition-all duration-300 hover:scale-110 hover:shadow-cyan-500/25 active:scale-95 backdrop-blur-sm"
+                className="controls-button center-btn-left flex items-center justify-center w-7 h-7 xs:w-8 xs:h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 lg:w-14 lg:h-14 rounded-full bg-gradient-to-br from-gray-900/80 to-black/80 text-white shadow-md xs:shadow-lg transition-all duration-300 hover:shadow-cyan-500/25 active:scale-95 backdrop-blur-sm"
               >
                 <Icons.Replay10 />
               </button>
@@ -2139,18 +2052,21 @@ function VideoPlayer({ video = null }) {
                   } catch (err) {}
                 }}
                 ref={centerPlayRef}
-                className={`controls-button center-control flex items-center justify-center w-16 h-16 md:w-20 md:h-20 rounded-full ${loading ? "bg-gradient-to-br from-gray-800 to-black" : "bg-gradient-to-br from-red-600 via-red-500 to-orange-500"} text-white shadow-3xl transition-all duration-300 hover:scale-105 hover:shadow-red-500/50 active:scale-95 z-[99999] relative overflow-hidden group`}
+                className={`controls-button center-btn-play flex items-center justify-center w-10 h-10 xs:w-12 xs:h-12 sm:w-14 sm:h-14 md:w-18 md:h-18 lg:w-20 lg:h-20 rounded-full ${
+                  loading ? "bg-gradient-to-br from-gray-800 to-black" : "bg-gradient-to-br from-red-600 via-red-500 to-orange-500"
+                } text-white shadow-xl xs:shadow-2xl transition-all duration-300 hover:shadow-red-500/50 active:scale-95 z-[99999] relative overflow-hidden group`}
                 disabled={loading}
               >
                 {loading ? (
-                  <svg className="w-10 h-10 text-white animate-spin" viewBox="0 0 24 24">
+                  <svg className="w-6 h-6 xs:w-7 xs:h-7 sm:w-8 sm:h-8 md:w-9 md:h-9 text-white animate-spin" viewBox="0 0 24 24">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" fill="none" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
                   </svg>
                 ) : (isPlaying ? <Icons.PauseCircle /> : <Icons.PlayArrow />)}
                 
-                {/* تأثير توهج */}
-                <div className={`absolute inset-0 rounded-full ${isPlaying ? "bg-gradient-to-r from-red-500/20 to-orange-500/20" : "bg-gradient-to-r from-red-600/20 to-cyan-500/20"} blur-xl group-hover:blur-2xl transition-all duration-500`}></div>
+                <div className={`absolute inset-0 rounded-full ${
+                  isPlaying ? "bg-gradient-to-r from-red-500/20 to-orange-500/20" : "bg-gradient-to-r from-red-600/20 to-cyan-500/20"
+                } blur-xl group-hover:blur-2xl transition-all duration-500`}></div>
               </button>
 
               <button
@@ -2163,7 +2079,7 @@ function VideoPlayer({ video = null }) {
                   setCurrentTime(v.currentTime);
                   showActionFeedbackPos(Icons.Forward10, "+5s", 800, 'right');
                 }}
-                className="controls-button flex items-center justify-center w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-gradient-to-br from-gray-900/80 to-black/80 text-white shadow-2xl transition-all duration-300 hover:scale-110 hover:shadow-cyan-500/25 active:scale-95 backdrop-blur-sm z-[99999]"
+                className="controls-button center-btn-right flex items-center justify-center w-7 h-7 xs:w-8 xs:h-8 sm:w-10 sm:h-10 md:w-12 md:h-12 lg:w-14 lg:h-14 rounded-full bg-gradient-to-br from-gray-900/80 to-black/80 text-white shadow-md xs:shadow-lg transition-all duration-300 hover:shadow-cyan-500/25 active:scale-95 backdrop-blur-sm z-[99999]"
               >
                 <Icons.Forward10 />
               </button>
@@ -2171,13 +2087,21 @@ function VideoPlayer({ video = null }) {
           </div>
         )}
 
-        {/* شريط التقدم */}
         <div
-          className={`absolute left-0 right-0 bottom-16  transition-all duration-300 transform z-50 bg-gradient-to-t from-black/60 via-black/40 to-transparent backdrop-blur-sm ${showControls ? "opacity-100 translate-y-0 pointer-events-auto" : "opacity-0 translate-y-4 pointer-events-none"}`}
-          style={isFullscreen ? { bottom: `calc(4rem + env(safe-area-inset-bottom) + ${fullscreenBottomInset}px)` } : undefined}
+          className={`unified-controls-background absolute left-0 right-0 bottom-16 transition-all duration-300 transform z-[99998] bg-gradient-to-t from-black/40 via-black/20 to-transparent backdrop-blur-sm ${
+            showControls ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
+          }`}
+          style={isFullscreen ? { bottom: 0 } : { bottom: 0 }}
+        />
+
+        <div
+          className={`progress-bar-container absolute left-0 right-0 transition-all duration-300 transform z-50 ${
+            showControls ? "opacity-100 translate-y-0 pointer-events-auto" : "opacity-0 translate-y-4 pointer-events-none"
+          }`}
+          style={isFullscreen ? { bottom: `calc(3rem + env(safe-area-inset-bottom) + ${fullscreenBottomInset}px)` } : { bottom: isTouchInput.current ? '1rem' : '2.5rem' }}
         >
-          <div className="flex items-center gap-3 px-4 py-3">
-            <div className="text-white/90 font-bold text-sm bg-black/30 px-3 py-1.5 rounded-lg">
+          <div className="flex items-center gap-0.5 xs:gap-0.5 sm:gap-1 px-0.5 xs:px-1 sm:px-1.5 md:px-2 lg:px-3 xl:px-4 py-0.5 xs:py-0.5 sm:py-1 md:py-1.5 lg:py-2 xl:py-3 w-full">
+            <div className="text-white/90 font-bold text-xs xs:text-xs sm:text-xs md:text-sm bg-black/30 px-0.5 xs:px-1 sm:px-1.5 md:px-2 lg:px-3 py-0.5 xs:py-0.5 sm:py-0.5 md:py-0.5 lg:py-1 rounded-sm xs:rounded-sm sm:rounded-md whitespace-nowrap min-w-[55px] xs:min-w-[60px] sm:min-w-[70px] text-center flex-shrink-0">
               <span
                 className="cursor-pointer select-none transition-all duration-200 hover:text-cyan-400"
                 onClick={(e) => {
@@ -2191,10 +2115,10 @@ function VideoPlayer({ video = null }) {
               >
                 {showRemaining && duration ? `-${formatTime(Math.max(0, duration - currentTime))}` : formatTime(currentTime)}
               </span>
-              <span className="text-white/60 ml-2 font-medium">/ {formatTime(duration)}</span>
+              <span className="text-white/60 mx-0.5 xs:mx-0.5 sm:mx-0.5 font-medium text-xs hidden xs:inline">/ {formatTime(duration)}</span>
             </div>
 
-            <div className="flex-1">
+            <div className="flex-1 relative min-w-[100px]">
               <div
                 role="slider"
                 aria-label="شريط التقدم"
@@ -2203,10 +2127,10 @@ function VideoPlayer({ video = null }) {
                 aria-valuenow={currentTime}
                 tabIndex={0}
                 ref={progressRef}
-                className={`relative cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 h-2.5 sm:h-3 bg-gradient-to-r from-gray-800/40 to-gray-800/20 rounded-full shadow-inner overflow-hidden group`}
+                className={`progress-bar relative cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 h-0.5 xs:h-1 sm:h-1.5 md:h-2 lg:h-2.5 xl:h-3 bg-gradient-to-r from-gray-800/40 to-gray-800/20 rounded-full shadow-inner overflow-visible group`}
                 onClick={handleSeek}
                 onMouseDown={handlePointerSeekStart}
-                onMouseEnter={(e) => { setHoverProgress(true); handleProgressMouseMove && handleProgressMouseMove(e); }}
+                onMouseEnter={() => { setHoverProgress(true); }}
                 onMouseLeave={() => { setHoverProgress(false); setHoverTime(null); }}
                 onMouseMove={(e) => { handleProgressMouseMove && handleProgressMouseMove(e); }}
                 onKeyDown={(e) => {
@@ -2245,7 +2169,9 @@ function VideoPlayer({ video = null }) {
                 />
 
                 <div
-                  className={`absolute top-0 h-full rounded-full shadow-lg transition-all duration-300 ${hoverProgress ? "bg-gradient-to-r from-red-500 via-cyan-500 to-blue-600" : "bg-gradient-to-r from-red-600 via-red-500 to-orange-500"}`}
+                  className={`absolute top-0 h-full rounded-full shadow-lg transition-all duration-300 ${
+                    hoverProgress ? "bg-gradient-to-r from-red-500 via-cyan-500 to-blue-600" : "bg-gradient-to-r from-red-600 via-red-500 to-orange-500"
+                  }`}
                   style={{
                     [isProgressRtl() ? "right" : "left"]: 0,
                     width: `${progressPct}%`,
@@ -2254,50 +2180,68 @@ function VideoPlayer({ video = null }) {
                 />
 
                 <div
-                  className={`absolute top-1/2 -translate-y-1/2 cursor-pointer transition-all duration-300 rounded-full ${hoverProgress ? "w-4 h-4 bg-white shadow-xl border-2 border-cyan-400" : "w-3 h-3 bg-white shadow-lg border-2 border-red-500"} group-hover:w-4 group-hover:h-4`}
+                  className={`progress-handle absolute top-1/2 -translate-y-1/2 cursor-pointer transition-all duration-300 rounded-full ${
+                    hoverProgress ? "w-4 h-4 bg-white shadow-xl border-2 border-cyan-400" : "w-3 h-3 bg-white shadow-lg border-2 border-red-500"
+                  } group-hover:w-4 group-hover:h-4`}
                   style={{
                     [isProgressRtl() ? "right" : "left"]: `${progressPct}%`,
-                      transform: isProgressRtl() ? "translate(50%, -50%)" : "translate(-50%, -50%)",
-                      zIndex: 2,
+                    transform: isProgressRtl() ? "translate(50%, -50%)" : "translate(-50%, -50%)",
+                    zIndex: 2,
                   }}
                   aria-hidden
                 />
+
+                {hoverProgress && hoverTime !== null && (
+                  <div
+                    className="absolute bottom-full mb-3 pointer-events-none z-50 animate-fade-in"
+                    style={{
+                      [isProgressRtl() ? "right" : "left"]: `${hoverPosPct}%`,
+                      transform: isProgressRtl() ? "translateX(50%)" : "translateX(-50%)",
+                    }}
+                  >
+                    <div className="bg-gradient-to-br from-gray-950 via-gray-900 to-black text-white px-4 py-2.5 rounded-lg text-sm font-bold whitespace-nowrap shadow-2xl border border-white/30 backdrop-blur-xl">
+                      <div className="flex items-center gap-2">
+                        <svg className="w-4 h-4 text-cyan-400" fill="currentColor" viewBox="0 0 24 24">
+                          <circle cx="12" cy="12" r="10" fill="none" stroke="currentColor" strokeWidth="2"/>
+                          <path d="M12 6v6l4 2.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+                        </svg>
+                        <span>{hoverTime || '00:00'}</span>
+                      </div>
+                      <div className="absolute top-full left-1/2 transform -translate-x-1/2 w-2 h-2 bg-gradient-to-b from-gray-900 to-black border border-white/30 rounded-full" style={{ marginTop: '-5px' }}></div>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           </div>
         </div>
 
-        {/* زر ملء الشاشة */}
         <div
-          className={`absolute left-4 bottom-6 z-[9999999] transition-all duration-300 transform ${showControls ? "opacity-100 translate-y-0 pointer-events-auto" : "opacity-0 translate-y-4 pointer-events-none"}`}
-          style={isFullscreen ? { bottom: `calc(1.5rem + env(safe-area-inset-bottom) + ${fullscreenBottomInset}px)` } : undefined}
+          className={`bottom-controls-container absolute left-0 right-0 bottom-0 px-0.5 xs:px-1 sm:px-2 md:px-2.5 lg:px-3 xl:px-4 transition-all duration-300 transform z-[99999] ${
+            showControls ? "opacity-100 translate-y-0 pointer-events-auto" : "opacity-0 translate-y-4 pointer-events-none"
+          }`}
         >
-          <button
-            type="button"
-            onClick={toggleFullscreen}
-            ref={fsButtonRef}
-            className="flex items-center justify-center rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white w-12 h-12 shadow-2xl transition-all duration-300 hover:scale-110 hover:shadow-cyan-500/25 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 backdrop-blur-sm border border-white/10"
-            aria-label={isFullscreen ? "خروج من ملء الشاشة" : "ملء الشاشة"}
-          >
-            {isFullscreen ? <Icons.FullscreenExit /> : <Icons.Fullscreen />}
-          </button>
-        </div>
-
-        {/* عناصر التحكم السفلية */}
-        <div
-          className={`absolute left-0 right-0 bottom-4 px-4 transition-all duration-300 transform z-[99999] bg-gradient-to-t from-black/70 via-black/50 to-transparent backdrop-blur-lg ${showControls ? "opacity-100 translate-y-0 pointer-events-auto" : "opacity-0 translate-y-4 pointer-events-none"}`}
-        >
-          <div className="flex flex-row items-center justify-between gap-3 sm:gap-5">
-            <div className="flex items-center gap-3 sm:gap-4 flex-wrap w-full sm:w-auto justify-start">
+          <div className="flex items-center justify-between gap-0.5 xs:gap-0.5 sm:gap-1 md:gap-1.5 lg:gap-2.5 xl:gap-4 w-full">
+            <div className="flex items-center gap-0.5 xs:gap-0.5 sm:gap-0.5 md:gap-1 lg:gap-1.5 xl:gap-2 justify-start flex-1 min-w-0">
               <button
                 onClick={togglePlayPauseImmediate}
-                className="controls-button flex items-center justify-center rounded-xl bg-gradient-to-br from-gray-900 to-black w-12 h-12 text-white shadow-2xl transition-all duration-300 hover:scale-110 hover:shadow-cyan-500/25 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 backdrop-blur-sm border border-white/10"
+                  className="play-pause-btn controls-button flex items-center justify-center rounded-lg sm:rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-2 sm:px-3 py-2 sm:py-3 shadow-2xl border border-white/10 transition-all duration-300 hover:shadow-cyan-500/25 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 backdrop-blur-sm"
                 aria-label={isPlaying ? "إيقاف" : "تشغيل"}
               >
                 {isPlaying ? <Icons.Pause /> : <Icons.Play />}
               </button>
 
-              <div className="flex items-center gap-2 bg-black/40 backdrop-blur-sm rounded-xl px-3 py-2 border border-white/10 volume-container">
+              <div 
+                className="volume-control-container flex items-center gap-0.5 xs:gap-0.5 sm:gap-0.5 md:gap-1 lg:gap-1.5 xl:gap-2 bg-gradient-to-br from-gray-900 to-black rounded-lg sm:rounded-xl px-2 sm:px-3 py-2 sm:py-3 border border-white/10 flex-shrink-0 transition-all duration-200 hover:border-cyan-400/40"
+                onMouseEnter={() => {
+                  if (!isTouchInput.current) setShowVolumeSlider(true);
+                  disablePageScrollWhileInteracting();
+                }}
+                onMouseLeave={() => {
+                  if (!isTouchInput.current) setShowVolumeSlider(false);
+                  enablePageScrollAfterInteracting();
+                }}
+              >
                 <button
                   onClick={() => {
                     if (volume > 0) {
@@ -2307,7 +2251,9 @@ function VideoPlayer({ video = null }) {
                       setVolume(prevVolumeRef.current > 0 ? prevVolumeRef.current : 1);
                     }
                   }}
-                  className="controls-button flex items-center justify-center text-white transition-transform duration-200 hover:scale-110 active:scale-95"
+                  className={`volume-btn controls-button flex items-center justify-center text-white transition-transform duration-200 active:scale-95 ${
+                    isTouchInput.current ? 'hover:text-white' : 'hover:text-cyan-400'
+                  }`}
                   aria-label={volume === 0 ? "تشغيل الصوت" : "كتم الصوت"}
                 >
                   {volume === 0 ? (
@@ -2332,49 +2278,68 @@ function VideoPlayer({ video = null }) {
                   }}
                   onPointerDown={showControlsWithOptions}
                   onWheel={handleVolumeWheel}
-                  onMouseEnter={() => disablePageScrollWhileInteracting()}
-                  onMouseLeave={() => enablePageScrollAfterInteracting()}
                   onFocus={() => disablePageScrollWhileInteracting()}
                   onBlur={() => enablePageScrollAfterInteracting()}
-                  className="volume-slider hidden sm:block w-0 sm:w-32 ml-2 transition-all duration-200 opacity-0"
+                  className={`volume-slider hidden sm:block ml-0.5 xs:ml-0.5 sm:ml-0.5 transition-all duration-300 ease-out ${
+                    showVolumeSlider ? 'w-12 sm:w-16 md:w-20 lg:w-28 opacity-100' : 'w-0 opacity-0 sm:w-0'
+                  }`}
                   aria-label="مستوى الصوت"
+                  onMouseDown={() => disablePageScrollWhileInteracting()}
+                  onMouseUp={() => enablePageScrollAfterInteracting()}
                 />
+
+                <div className={`text-xs font-bold text-cyan-400 transition-all duration-300 ml-0.5 sm:ml-1 hidden sm:block ${
+                  showVolumeSlider ? 'opacity-100 w-auto' : 'opacity-0 w-0 overflow-hidden'
+                }`}>
+                  {Math.round(volume * 100)}%
+                </div>
               </div>
 
-              {/* قائمة الجودة (لشاشات كبيرة) */}
-              <div className="relative hidden sm:block" ref={qualityRef}>
+              <div className="relative" ref={qualityRef}>
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
                     setQualityMenuOpen(!qualityMenuOpen);
                     setSpeedMenuOpen(false);
-                    setSettingsMenuOpen(false);
                     ignoreDocClickRef.current = true;
                     setTimeout(() => (ignoreDocClickRef.current = false), 50);
                   }}
-                  className="controls-button flex items-center gap-3 rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-4 py-3 shadow-2xl border border-white/10 transition-all duration-300 hover:scale-105 hover:shadow-cyan-500/25 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 backdrop-blur-sm"
+                  className="quality-btn controls-button flex items-center justify-center gap-0 md:gap-1 rounded-lg sm:rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-2 sm:px-2 md:px-3 py-1.5 sm:py-2 md:py-3 text-xs sm:text-sm shadow-2xl border border-white/10 transition-all duration-300 hover:shadow-cyan-500/25 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 backdrop-blur-sm"
                   aria-expanded={qualityMenuOpen}
                   aria-label="اختيار الجودة"
                 >
                   <Icons.Quality />
-                  <span className="font-bold tracking-wide">
+                  <span className="font-bold tracking-wide hidden md:inline">
                     {currentQuality ? `${currentQuality}p` : "الجودة"}
                   </span>
-                  <Icons.ChevronDown />
+                  <Icons.ChevronDown className="hidden md:inline" />
                 </button>
                 {qualityMenuOpen && video && video.qualities && (
-                  <div className="absolute bottom-16 right-0 bg-gradient-to-b from-gray-900 to-black border border-white/20 rounded-2xl shadow-2xl py-2 z-50 w-56 backdrop-blur-xl max-h-60 overflow-y-auto animate-scale-in">
-                    <div className="px-3 py-2 text-xs text-white/80 font-bold border-b border-white/10">اختر الجودة</div>
+                  <div className="quality-menu absolute bottom-12 sm:bottom-14 right-0 bg-gradient-to-b from-gray-900 to-black border border-white/20 rounded-lg sm:rounded-2xl shadow-2xl py-1.5 sm:py-2 z-50 w-40 sm:w-56 backdrop-blur-xl max-h-48 sm:max-h-60 overflow-y-auto animate-scale-in">
+                    <div className="px-2 sm:px-3 py-1.5 sm:py-2 text-xs text-white/80 font-bold border-b border-white/10">اختر الجودة</div>
                     {[...video.qualities]
                       .sort((a, b) => parseInt(a.quality) - parseInt(b.quality))
                       .map((q) => (
                         <button
                           key={q.quality}
-                          onClick={() => handleQualityChangePersist(q.quality)}
-                          className={`w-full text-right px-5 py-3 text-sm transition-all duration-200 ${String(q.quality) === String(currentQuality) ? "bg-gradient-to-r from-red-600 to-red-800 text-white font-bold" : "text-white/80 hover:bg-white/10 hover:text-white"}`}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            handleQualityChangePersist(q.quality);
+                          }}
+                          onTouchEnd={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            handleQualityChangePersist(q.quality);
+                          }}
+                          className={`w-full text-right px-2 sm:px-5 py-1.5 sm:py-3 text-xs sm:text-sm transition-all duration-200 ${
+                            String(q.quality) === String(currentQuality) 
+                              ? "bg-gradient-to-r from-red-600 to-red-800 text-white font-bold" 
+                              : "text-white/80 hover:bg-white/10 hover:text-white"
+                          }`}
                         >
-                          <span className="flex items-center justify-between">
-                            <span className="text-xs opacity-70">{RES_MAP[q.quality] ? `${RES_MAP[q.quality].w}×${RES_MAP[q.quality].h}` : ""}</span>
+                          <span className="flex items-center justify-between gap-1">
+                            <span className="text-xs opacity-70 hidden sm:inline">{RES_MAP[q.quality] ? `${RES_MAP[q.quality].w}×${RES_MAP[q.quality].h}` : ""}</span>
                             {q.quality}p
                           </span>
                         </button>
@@ -2383,42 +2348,58 @@ function VideoPlayer({ video = null }) {
                 )}
               </div>
 
-              {/* قائمة السرعة (لشاشات كبيرة) */}
-              <div className="relative hidden sm:block" ref={speedRef}>
+              <div className="relative" ref={speedRef}>
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
                     setSpeedMenuOpen(!speedMenuOpen);
                     setQualityMenuOpen(false);
-                    setSettingsMenuOpen(false);
                     ignoreDocClickRef.current = true;
                     setTimeout(() => (ignoreDocClickRef.current = false), 50);
                   }}
-                    className="controls-button flex items-center gap-3 rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-4 py-3 shadow-2xl border border-white/10 transition-all duration-300 hover:scale-105 hover:shadow-cyan-500/25 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 backdrop-blur-sm"
+                  className="speed-btn controls-button flex items-center justify-center gap-0 md:gap-1 rounded-lg sm:rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-2 sm:px-2 md:px-3 py-1.5 sm:py-2 md:py-3 text-xs sm:text-sm shadow-2xl border border-white/10 transition-all duration-300 hover:shadow-cyan-500/25 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 backdrop-blur-sm"
                   aria-expanded={speedMenuOpen}
                   aria-label="اختيار السرعة"
                 >
                   <Icons.Speed />
-                  <span className="font-bold tracking-wide">{playbackRate.toFixed(2)}x</span>
-                  <Icons.ChevronDown />
+                  <span className="font-bold tracking-wide hidden md:inline">{playbackRate.toFixed(2)}x</span>
+                  <Icons.ChevronDown className="hidden md:inline" />
                 </button>
                 {speedMenuOpen && (
-                  <div className="absolute bottom-16 right-0 bg-gradient-to-b from-gray-900 to-black border border-white/20 rounded-2xl shadow-2xl w-64 p-4 backdrop-blur-xl z-50 animate-scale-in">
-                    <div className="flex flex-col items-center w-full gap-4 mb-3">
-                      <div className="text-lg font-bold text-white/90 mb-2">سرعة التشغيل</div>
-                      <div className="flex items-center justify-center gap-4 w-full">
+                  <div className="speed-menu absolute bottom-12 sm:bottom-14 right-0 bg-gradient-to-b from-gray-900 to-black border border-white/20 rounded-lg sm:rounded-2xl shadow-2xl w-44 sm:w-64 p-2 sm:p-4 backdrop-blur-xl z-50 animate-scale-in">
+                    <div className="flex flex-col items-center w-full gap-2 sm:gap-4 mb-1.5 sm:mb-3">
+                      <div className="text-xs sm:text-lg font-bold text-white/90 mb-0.5 sm:mb-2">سرعة التشغيل</div>
+                      <div className="flex items-center justify-center gap-2 sm:gap-4 w-full">
                         <button
-                          onClick={() => adjustRate(-0.05)}
-                          className="bg-gradient-to-br from-gray-800 to-black text-white rounded-full w-10 h-10 flex items-center justify-center text-xl shadow-lg transition-all hover:scale-110 active:scale-95 border border-white/10"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            adjustRate(-0.05);
+                          }}
+                          onTouchEnd={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            adjustRate(-0.05);
+                          }}
+                          className="bg-gradient-to-br from-gray-800 to-black text-white rounded-full w-6 h-6 sm:w-10 sm:h-10 flex items-center justify-center text-sm sm:text-xl shadow-lg transition-all  active:scale-95 border border-white/10"
                         >
                           −
                         </button>
-                        <div className="text-3xl font-bold bg-gradient-to-r from-red-500 to-cyan-500 bg-clip-text text-transparent">
+                        <div className="text-lg sm:text-3xl font-bold bg-gradient-to-r from-red-500 to-cyan-500 bg-clip-text text-transparent">
                           {playbackRate.toFixed(2)}x
                         </div>
                         <button
-                          onClick={() => adjustRate(0.05)}
-                          className="bg-gradient-to-br from-gray-800 to-black text-white rounded-full w-10 h-10 flex items-center justify-center text-xl shadow-lg transition-all hover:scale-110 active:scale-95 border border-white/10"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            adjustRate(0.05);
+                          }}
+                          onTouchEnd={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            adjustRate(0.05);
+                          }}
+                          className="bg-gradient-to-br from-gray-800 to-black text-white rounded-full w-6 h-6 sm:w-10 sm:h-10 flex items-center justify-center text-sm sm:text-xl shadow-lg transition-all  active:scale-95 border border-white/10"
                         >
                           +
                         </button>
@@ -2441,158 +2422,28 @@ function VideoPlayer({ video = null }) {
                   </div>
                 )}
               </div>
-
-              {/* قائمة الإعدادات (لشاشات صغيرة) */}
-              <div className="relative sm:hidden" ref={settingsRef}>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    const willOpen = !settingsMenuOpen;
-                    setQualityMenuOpen(false);
-                    setSpeedMenuOpen(false);
-                    ignoreDocClickRef.current = true;
-                    setTimeout(() => (ignoreDocClickRef.current = false), 50);
-                    // compute position anchored to the settings button
-                    try {
-                      const rect = settingsRef.current && settingsRef.current.getBoundingClientRect();
-                      // menu width/height estimates for placement logic
-                      const MENU_W = 140; // approx px (w-36)
-                      const MENU_H = 160; // estimated height in px
-                      if (rect) {
-                        const winW = window.innerWidth || 0;
-                        const winH = window.innerHeight || 0;
-                        const left = Math.max(8, Math.min(rect.left, winW - MENU_W - 8));
-
-                        // compute available space below and above the button
-                        const bottomInset = isFullscreen ? (fullscreenBottomInset || 0) : 0;
-                        const availableBelow = winH - rect.bottom - bottomInset;
-                        const availableAbove = rect.top;
-
-                        let top;
-                        if (availableBelow >= MENU_H + 12) {
-                          // enough room below
-                          top = rect.bottom + 6;
-                        } else if (availableAbove >= MENU_H + 12) {
-                          // show above the button
-                          top = Math.max(8, rect.top - MENU_H - 6);
-                        } else {
-                          // fallback: clamp to within viewport
-                          top = Math.max(8, Math.min(rect.bottom + 6, winH - MENU_H - 8));
-                        }
-
-                        setSettingsMenuPos({ left, top });
-                      } else {
-                        setSettingsMenuPos(null);
-                      }
-                    } catch (err) {
-                      setSettingsMenuPos(null);
-                    }
-                    setSettingsMenuOpen(willOpen);
-                    if (!willOpen) setSettingsMenuPos(null);
-
-                    // debug: log values so we can inspect why menu may not appear
-                    try {
-                      // eslint-disable-next-line no-console
-                      console.debug('[VideoPlayer] settings click', { willOpen, settingsMenuOpen, settingsMenuPos, rect: settingsRef.current && settingsRef.current.getBoundingClientRect() });
-                    } catch (e) {}
-                  }}
-                  aria-expanded={settingsMenuOpen}
-                  onMouseDown={(e) => e.stopPropagation()}
-                  className="controls-button settings-button flex items-center justify-center rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-3 py-3 shadow-2xl border border-white/10 w-12 h-12 transition-all duration-300 hover:scale-110 hover:shadow-cyan-500/25 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 backdrop-blur-sm"
-                  aria-label="الإعدادات"
-                >
-                  <Icons.Settings />
-                </button>
-                {settingsMenuOpen && (typeof document !== 'undefined' ? createPortal(
-                  <div
-                    ref={settingsMenuRef}
-                    className="fixed bg-gradient-to-b from-gray-900 to-black border border-white/20 rounded-2xl shadow-2xl z-[99999] w-40 max-h-64 overflow-y-auto backdrop-blur-xl p-3 animate-scale-in"
-                    style={settingsMenuPos ? { left: `${settingsMenuPos.left}px`, top: `${settingsMenuPos.top}px` } : { right: '0.75rem', bottom: '5rem' }}
-                  >
-                    <div className="px-2 pt-1 text-xs text-white/80 font-bold mb-2">الجودة</div>
-                    {video &&
-                      video.qualities &&
-                      [...video.qualities]
-                        .sort((a, b) => parseInt(a.quality) - parseInt(b.quality))
-                        .map((q) => (
-                          <button
-                            key={q.quality}
-                            onClick={() => handleQualityChangePersist(q.quality)}
-                            className={`w-full text-right px-3 py-2.5 text-sm rounded-lg transition-all duration-200 mb-1 ${String(q.quality) === String(currentQuality) ? "bg-gradient-to-r from-red-600 to-red-800 text-white font-bold" : "text-white/80 hover:bg-white/10 hover:text-white"}`}
-                          >
-                            {q.quality}p
-                          </button>
-                        ))}
-                    <div className="px-2 pt-3 text-xs text-white/80 flex items-center justify-between mb-2">
-                      <div className="text-xs font-bold">السرعة</div>
-                      <div className="font-bold text-white text-sm">{playbackRate.toFixed(2)}x</div>
-                    </div>
-                    <div className="px-2 pb-2 pt-2">
-                      <input
-                        type="range"
-                        min="0.25"
-                        max="3"
-                        step="0.05"
-                        value={playbackRate}
-                        onChange={(e) => {
-                          const v = Math.round(parseFloat(e.target.value) * 100) / 100;
-                          setPlaybackRate(v);
-                          showRateFeedback(v);
-                        }}
-                        className="w-full accent-gradient"
-                      />
-                    </div>
-                    <div className="border-t border-white/10 mt-2 pt-2 px-2">
-                      <button
-                        onClick={() => {
-                          setSettingsMenuOpen(false);
-                          handleDownload();
-                        }}
-                        disabled={isDownloading}
-                        className={`w-full text-center px-3 py-2.5 text-sm rounded-lg transition-all duration-200 ${(!isLoggedIn && !user?.isAdmin) ? 'opacity-50 cursor-not-allowed bg-transparent' : 'bg-gradient-to-r from-cyan-600 to-blue-500 text-white font-bold shadow-lg hover:shadow-cyan-500/25'}`}
-                      >
-                        {isDownloading ? (downloadProgress != null ? `تحميل ${downloadProgress}%` : 'جاري التحميل...') : 'تحميل الفيديو'}
-                      </button>
-                    </div>
-                  </div>,
-                  // when player is in fullscreen render the menu inside the fullscreen element
-                  (isFullscreen && typeof document !== 'undefined' && document.fullscreenElement) ? document.fullscreenElement : document.body
-                ) : null)}
-              </div>
-
-              {/* زر التحميل */}
-              <div className="relative hidden sm:block">
-                <button
-                  onClick={handleDownload}
-                  disabled={isDownloading}
-                  className={`flex items-center gap-3 rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-4 py-3 shadow-2xl border border-white/10 transition-all duration-300 hover:scale-105 hover:shadow-cyan-500/25 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 backdrop-blur-sm ${!isLoggedIn && !user?.isAdmin ? "opacity-50 cursor-not-allowed" : ""}`}
-                  aria-label="تحميل الفيديو"
-                >
-                  {isDownloading ? (
-                    <>
-                      <svg className="w-5 h-5 animate-spin" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
-                      </svg>
-                      <span className="font-bold tracking-wide">
-                        {downloadProgress != null ? `تحميل ${downloadProgress}%` : "جاري التحميل..."}
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      <Icons.Download />
-                      <span className="font-bold tracking-wide">تحميل</span>
-                    </>
-                  )}
-                </button>
-              </div>
             </div>
+
+            <button
+              type="button"
+              onClick={toggleFullscreen}
+              ref={fsButtonRef}
+              className="fullscreen-btn controls-button flex items-center justify-center rounded-lg sm:rounded-xl bg-gradient-to-br from-gray-900/90 to-black/90 text-white px-2 sm:px-3 py-2 sm:py-3 shadow-2xl border border-white/10 transition-all duration-300 hover:shadow-cyan-500/25 active:scale-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 backdrop-blur-sm flex-shrink-0 xs:ml-auto"
+              aria-label={isFullscreen ? "خروج من ملء الشاشة" : "ملء الشاشة"}
+            >
+              {isFullscreen ? <Icons.FullscreenExit /> : <Icons.Fullscreen />}
+            </button>
           </div>
         </div>
       </div>
       
-      {/* إضافة الأنيميشن في الـCSS */}
       <style>{`
+        /* الأنيميشن الأساسية */
+        @keyframes fade-in {
+          0% { opacity: 0; }
+          100% { opacity: 1; }
+        }
+        
         @keyframes scale-in {
           0% { transform: scale(0.8); opacity: 0; }
           100% { transform: scale(1); opacity: 1; }
@@ -2638,128 +2489,126 @@ function VideoPlayer({ video = null }) {
           animation: fade-in 0.3s ease-out;
         }
         
+        /* تحسينات شريط التقدم */
+        .progress-bar {
+          transition: height 0.2s ease;
+        }
+        
+        .progress-bar:hover {
+          height: 0.5rem !important;
+        }
+        
+        .progress-bar:hover .progress-handle {
+          width: 1rem !important;
+          height: 1rem !important;
+          box-shadow: 0 0 12px rgba(59, 130, 246, 0.6);
+        }
+        
+        @media (hover: hover) and (pointer: fine) {
+          .progress-bar:hover {
+            height: 0.375rem;
+          }
+        }
+        
+        
+        /* تحسينات لشاشات ملء الشاشة */
+        .video-player-container.fixed {
+          .center-controls {
+            gap: 3rem !important;
+          }
+          
+          .center-btn-left,
+          .center-btn-right {
+            width: 4.5rem !important;
+            height: 4.5rem !important;
+          }
+          
+          .center-btn-play {
+            width: 6rem !important;
+            height: 6rem !important;
+          }
+          
+          .progress-bar {
+            height: 0.6rem !important;
+          }
+          
+          .progress-handle {
+            width: 1.2rem !important;
+            height: 1.2rem !important;
+          }
+        }
+                
+        
+        /* المنزلقات */
         .accent-gradient {
           background: linear-gradient(to right, #ef4444, #3b82f6);
-          height: 6px;
-          border-radius: 3px;
+          height: 0.375rem;
+          border-radius: 0.1875rem;
           outline: none;
         }
         
         .accent-gradient::-webkit-slider-thumb {
           appearance: none;
-          width: 18px;
-          height: 18px;
+          width: 1.125rem;
+          height: 1.125rem;
           border-radius: 50%;
           background: white;
-          border: 2px solid #3b82f6;
+          border: 0.125rem solid #3b82f6;
           cursor: pointer;
-          box-shadow: 0 0 10px rgba(59, 130, 246, 0.5);
+          box-shadow: 0 0 0.625rem rgba(59, 130, 246, 0.5);
         }
         
         .accent-gradient::-moz-range-thumb {
-          width: 18px;
-          height: 18px;
+          width: 1.125rem;
+          height: 1.125rem;
           border-radius: 50%;
           background: white;
-          border: 2px solid #3b82f6;
+          border: 0.125rem solid #3b82f6;
           cursor: pointer;
-          box-shadow: 0 0 10px rgba(59, 130, 246, 0.5);
+          box-shadow: 0 0 0.625rem rgba(59, 130, 246, 0.5);
         }
         
-        .video-player {
-          filter: brightness(1.05);
+        
+        
+        /* تحسين الوصول */
+        .controls-button:focus-visible {
+          outline: 2px solid #22d3ee;
+          outline-offset: 2px;
+          box-shadow: 0 0 0 3px rgba(34, 211, 238, 0.1);
         }
         
-        .video-player:fullscreen {
-          filter: brightness(1.1);
+        /* دعم السيف أريا */
+        .video-player-container:fullscreen {
+          padding-top: env(safe-area-inset-top, 0px);
+          padding-bottom: env(safe-area-inset-bottom, 0px);
+          padding-left: env(safe-area-inset-left, 0px);
+          padding-right: env(safe-area-inset-right, 0px);
         }
-
-        /* Volume slider: hidden until hover (desktop) */
-        .volume-container {
-          display: inline-flex;
-          align-items: center;
+        
+        /* تحسينات الأداء */
+        .video-player-container * {
+          -webkit-tap-highlight-color: transparent;
+          touch-action: manipulation;
         }
-
-        .volume-container .volume-slider {
-          width: 0;
-          opacity: 0;
-          transform: scaleX(0);
-          transition: all 180ms ease-in-out;
-          overflow: hidden;
+        
+        /* تصميم منظم للنص */
+        .video-title-overlay {
+          font-size: clamp(0.75rem, 2.5vw, 1rem);
         }
-
-        .volume-container:hover .volume-slider,
-        .volume-slider:focus {
-          width: 80px;
-          opacity: 1;
-          transform: scaleX(1);
+        
+        /* تحسينات للتباعد والمسافات */
+        .video-player-wrapper {
+          container-type: inline-size;
         }
-
-        /* Responsive: shrink controls on small screens and make center icon slightly larger */
-        @media (max-width: 640px) {
-          /* make controls noticeably smaller on very small screens */
-          .controls-button {
-            width: 32px !important;
-            height: 32px !important;
-            padding: 0.12rem !important;
-            border-radius: 0.4rem !important;
+        
+        @container (max-width: 400px) {
+          .center-controls {
+            gap: 0.5rem !important;
           }
-
-          /* shrink default svg icons inside control buttons */
-          .controls-button svg {
-            width: 12px !important;
-            height: 12px !important;
-          }
-
-          /* center control remains slightly larger than side buttons */
-          .center-control {
-            width: 40px !important;
-            height: 40px !important;
-          }
-
-          .center-control svg {
-            width: 22px !important;
-            height: 22px !important;
-          }
-
-          /* make the large center play icon a bit smaller on very small screens */
-          .center-control .w-10, .center-control .h-10, .center-control .w-12, .center-control .h-12 {
-            width: 20px !important;
-            height: 20px !important;
-          }
-
-          /* slightly reduce progress bar height for compact layout */
-          .relative.cursor-pointer.h-2.5 {
-            height: 6px !important;
-          }
-
-          /* volume slider hidden by default and expands on hover */
-          .volume-container .volume-slider {
-            width: 0 !important;
-            opacity: 0 !important;
-            transform: scaleX(0) !important;
-            transition: all 180ms ease-in-out !important;
-          }
-
-          .volume-container:hover .volume-slider, .volume-slider:focus {
-            width: 80px !important;
-            opacity: 1 !important;
-            transform: scaleX(1) !important;
-          }
-
-          /* larger settings icon so it doesn't crowd other icons */
-          .settings-button {
-            width: 44px !important;
-            height: 44px !important;
-          }
-
-          .settings-button svg {
-            width: 20px !important;
-            height: 20px !important;
-          }
-
-          .relative.cursor-pointer .-translate-y-1\/2 {
-            transform: translate(-50%, -50%) !important;
+          
+          .center-btn-play {
+            width: 2.5rem !important;
+            height: 2.5rem !important;
           }
         }
       `}</style>
@@ -2770,7 +2619,5 @@ function VideoPlayer({ video = null }) {
 VideoPlayer.propTypes = {
   video: PropTypes.object,
 };
-
-// default props replaced by ES default parameter in function signature
 
 export default React.memo(VideoPlayer);
