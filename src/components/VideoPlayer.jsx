@@ -3,17 +3,33 @@ import React, {
   useRef,
   useState,
   useCallback,
+  useMemo,
 } from "react";
 import { createPortal } from 'react-dom';
 import PropTypes from 'prop-types';
 import api from "../utils/api";
 import { useAuth } from "../hooks/useAuth";
 
+// Resolution map used to match quality labels to level heights
+const RES_MAP = {
+  "144": { w: 256, h: 144 },
+  "240": { w: 426, h: 240 },
+  "360": { w: 640, h: 360 },
+  "480": { w: 854, h: 480 },
+  "720": { w: 1280, h: 720 },
+  "1080": { w: 1920, h: 1080 },
+  "1440": { w: 2560, h: 1440 },
+  "2160": { w: 3840, h: 2160 },
+};
+
 function VideoPlayer({ video = null }) {
   const DEBUG_LONGPRESS = false;
   const dlog = (...args) => {
     try { if (DEBUG_LONGPRESS) console.debug('[VP.longpress]', ...args); } catch (e) {}
   };
+  // Global player debug flag (set via Vite env `VITE_VIDEO_PLAYER_DEBUG=1`)
+  const PLAYER_DEBUG = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_VIDEO_PLAYER_DEBUG === '1') || false;
+  const pdebug = (...args) => { try { if (PLAYER_DEBUG) console.debug('[VP]', ...args); } catch (e) {} };
   
   // long-press/jitter tuning
   const CONTROLS_REVEAL_SUPPRESS_MS = 1000;
@@ -31,6 +47,8 @@ function VideoPlayer({ video = null }) {
   const settingsRef = useRef(null);
   const settingsMenuRef = useRef(null);
   const hlsRef = useRef(null);
+  const rafPendingRef = useRef(false);
+  const saveLastRef = useRef(0);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [showControls, setShowControls] = useState(true);
@@ -59,6 +77,7 @@ function VideoPlayer({ video = null }) {
   const prevHlsLevelRef = useRef(null);
   const hlsFreezeTimeoutRef = useRef(null);
   const [currentQuality, setCurrentQuality] = useState(null);
+  const manualQualityRef = useRef(null);
   const [shouldInit, setShouldInit] = useState(true);
 
   const [volume, setVolume] = useState(() => {
@@ -125,21 +144,30 @@ function VideoPlayer({ video = null }) {
 
   const handleProgressMouseMove = useCallback((e) => {
     try {
-      if (!progressRef.current || !duration || !e || e.clientX === undefined) return;
-      const rect = progressRef.current.getBoundingClientRect();
-      const clientX = e.clientX;
-      
-      // حساب الموقع حسب الاتجاه (RTL/LTR)
-      const isRtl = getComputedStyle(progressRef.current).direction === "rtl";
-      const x = isRtl ? rect.right - clientX : clientX - rect.left;
-      
-      if (x < 0 || x > rect.width) return;
-      const pct = Math.max(0, Math.min(1, rect.width > 0 ? x / rect.width : 0));
-      const seconds = Math.round(pct * duration);
-      setHoverPosPct(pct * 100);
-      setHoverTime(formatTime(seconds));
+      if (rafPendingRef.current) return;
+      rafPendingRef.current = true;
+      requestAnimationFrame(() => {
+        try {
+          if (!progressRef.current || !duration || !e || e.clientX === undefined) return;
+          const rect = progressRef.current.getBoundingClientRect();
+          const clientX = e.clientX;
+          // حساب الموقع حسب الاتجاه (RTL/LTR)
+          const isRtl = getComputedStyle(progressRef.current).direction === "rtl";
+          const x = isRtl ? rect.right - clientX : clientX - rect.left;
+          if (x < 0 || x > rect.width) return;
+          const pct = Math.max(0, Math.min(1, rect.width > 0 ? x / rect.width : 0));
+          const seconds = Math.round(pct * duration);
+          setHoverPosPct(pct * 100);
+          setHoverTime(formatTime(seconds));
+        } catch (err) {
+          console.error('handleProgressMouseMove error:', err);
+        } finally {
+          rafPendingRef.current = false;
+        }
+      });
     } catch (err) {
-      console.error('handleProgressMouseMove error:', err);
+      console.error('handleProgressMouseMove outer error:', err);
+      rafPendingRef.current = false;
     }
   }, [duration, formatTime]);
 
@@ -187,16 +215,8 @@ function VideoPlayer({ video = null }) {
   const MOBILE_TAP_TIMEOUT = 300;
   const LONG_PRESS_THRESHOLD = 500;
   
-  const RES_MAP = {
-    "144": { w: 256, h: 144 },
-    "240": { w: 426, h: 240 },
-    "360": { w: 640, h: 360 },
-    "480": { w: 854, h: 480 },
-    "720": { w: 1280, h: 720 },
-    "1080": { w: 1920, h: 1080 },
-    "1440": { w: 2560, h: 1440 },
-    "2160": { w: 3840, h: 2160 },
-  };
+  // RES_MAP moved to module scope to avoid recreating the map on each render
+  /* RES_MAP is defined at module scope */
 
   const scheduleHideControls = useCallback((delay) => {
     if (hideControlsTimeoutRef.current) {
@@ -627,12 +647,15 @@ function VideoPlayer({ video = null }) {
         console.warn('applyQualityToHls error:', e);
       }
     }
+    return bestIdx;
   }, []);
 
   const handleQualityChangePersist = useCallback((q) => {
     try {
       localStorage.setItem(`video-default-quality-${video._id}`, String(q));
     } catch (e) {}
+    // remember that the user explicitly chose this quality
+    try { manualQualityRef.current = q; } catch (e) {}
     setCurrentQuality(q);
     
     // Show feedback to user
@@ -643,6 +666,16 @@ function VideoPlayer({ video = null }) {
       setQualityMenuOpen(false);
       setSettingsMenuOpen(false);
     }, 100);
+
+    // Reinitialize the player to force HLS to load the chosen quality as the starting
+    // manifest/level. This avoids ABR immediately switching back to a previously
+    // observed level. Use a short toggle to re-run the initPlayer effect.
+    try {
+      setShouldInit(false);
+      setTimeout(() => {
+        try { setShouldInit(true); } catch (e) {}
+      }, 80);
+    } catch (e) {}
 
     try {
       const uc = localStorage.getItem("userCode");
@@ -684,14 +717,34 @@ function VideoPlayer({ video = null }) {
 
       if (hlsRef.current) {
         try {
-          console.debug && console.debug('HLS: loading playlist for quality', q, playlistUrl);
+          pdebug('HLS: loading playlist for quality', q, playlistUrl);
           try { hlsRef.current.autoLevelEnabled = false; } catch (e) {}
           try { hlsRef.current.loadSource(playlistUrl); } catch (e) {}
           try { hlsRef.current.attachMedia(videoRef.current); } catch (e) {}
               setTimeout(() => {
                 try { safePlay(); } catch (e) {}
               }, 250);
-          try { applyQualityToHls(hlsRef.current, q); } catch (e) {}
+          try {
+            const appliedIdx = applyQualityToHls(hlsRef.current, q);
+            // Force re-apply for a short window until hls honors the manual level.
+            let attempts = 0;
+            const reapply = setInterval(() => {
+              attempts += 1;
+              try {
+                const idx = applyQualityToHls(hlsRef.current, q);
+                if (typeof idx === 'number' && idx >= 0) {
+                  try { hlsRef.current.currentLevel = idx; } catch (e) {}
+                  // if currentLevel matches, stop retrying
+                  try {
+                    if (hlsRef.current.currentLevel === idx) {
+                      clearInterval(reapply);
+                    }
+                  } catch (e) {}
+                }
+              } catch (e) {}
+              if (attempts > 6) clearInterval(reapply);
+            }, 350);
+          } catch (e) {}
         } catch (e) {}
       } else if (videoRef.current) {
         const v = videoRef.current;
@@ -840,7 +893,16 @@ function VideoPlayer({ video = null }) {
                 errorSetDelayRef.current = null;
               }
             try {
-              if (defaultQuality) applyQualityToHls(hls, defaultQuality);
+              // Use the saved/current quality (if the user changed it) instead of the
+              // initially captured defaultQuality which may be stale. This prevents
+              // MANIFEST_PARSED from reverting the user's chosen quality after a reload.
+              try {
+                const savedQ = localStorage.getItem(`video-default-quality-${video._id}`);
+                const useQ = savedQ || defaultQuality;
+                if (useQ) applyQualityToHls(hls, useQ);
+              } catch (e) {
+                if (defaultQuality) applyQualityToHls(hls, defaultQuality);
+              }
             } catch (e) {}
             safePlay();
             try {
@@ -872,7 +934,7 @@ function VideoPlayer({ video = null }) {
               // محاولتان فقط قبل إظهار الخطأ
               if (data && data.fatal && isLevelParsing && hlsErrorAttemptsRef.current < 2) {
                 hlsErrorAttemptsRef.current += 1;
-                console.debug && console.debug('HLS: levelParsingError detected — retrying loadSource (attempt)', hlsErrorAttemptsRef.current);
+                pdebug('HLS: levelParsingError detected — retrying loadSource (attempt)', hlsErrorAttemptsRef.current);
                 setTimeout(() => {
                   try {
                     hls.loadSource(playlistUrl);
@@ -895,7 +957,7 @@ function VideoPlayer({ video = null }) {
                   // إذا كان الخطأ بسبب تغيير الجودة ولم نتجاوز محاولتين، حاول مرة أخرى
                   if (qualityChangeAttemptsRef.current < 2) {
                     qualityChangeAttemptsRef.current += 1;
-                    console.debug && console.debug('Quality change retry (attempt)', qualityChangeAttemptsRef.current);
+                    pdebug('Quality change retry (attempt)', qualityChangeAttemptsRef.current);
                     setTimeout(() => {
                       if (hlsRef.current) {
                         try {
@@ -925,6 +987,19 @@ function VideoPlayer({ video = null }) {
               }, 700);
             }
           });
+
+          // If HLS switches levels (e.g., due to internal adaptation), ensure the
+          // user's manual choice is re-applied so we don't silently revert to a
+          // higher quality. This enforces the manual selection after level switches.
+          try {
+            hls.on(HlsModule.Events.LEVEL_SWITCHED, () => {
+              try {
+                if (manualQualityRef.current) {
+                  applyQualityToHls(hls, manualQualityRef.current);
+                }
+              } catch (e) {}
+            });
+          } catch (e) {}
 
           hls.loadSource(playlistUrl);
           hls.attachMedia(videoRef.current);
@@ -1033,12 +1108,17 @@ function VideoPlayer({ video = null }) {
 
         saveInt = setInterval(() => {
           try {
-            if (videoRef.current && !isNaN(videoRef.current.currentTime)) {
-              localStorage.setItem(
-                `video-pos-${video._id}`,
-                String(videoRef.current.currentTime),
-              );
+            const v = videoRef.current;
+            if (!v || isNaN(v.currentTime)) return;
+            const docHidden = (typeof document !== 'undefined' && document.hidden);
+            const now = Date.now();
+            // When the document is hidden or the video is paused, save less frequently
+            // to reduce localStorage churn. Normal active saves occur every 5s.
+            if ((docHidden || v.paused) && (now - (saveLastRef.current || 0) < 30000)) {
+              return;
             }
+            localStorage.setItem(`video-pos-${video._id}`, String(v.currentTime));
+            saveLastRef.current = now;
           } catch (e) {}
         }, 5000);
 
@@ -1712,7 +1792,7 @@ function VideoPlayer({ video = null }) {
     return () => window.removeEventListener("resize", handleResize);
   }, [updateVideoSizing]);
 
-  const Icons = {
+  const Icons = useMemo(() => ({
     Play: () => (
       <svg className="w-6 h-6" viewBox="0 0 24 24" fill="currentColor">
         <path d="M8 5V19L19 12L8 5Z" className="drop-shadow-lg" />
@@ -1797,7 +1877,7 @@ function VideoPlayer({ video = null }) {
         <path d="M9 16h2V8H9v8zm3-14C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm1-4h2V8h-2v8z" />
       </svg>
     ),
-  };
+  }), []);
 
   const progressPct = duration ? (currentTime / duration) * 100 : 0;
 
