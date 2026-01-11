@@ -6,6 +6,24 @@ const api = axios.create({
   baseURL: API_BASE,
 });
 
+// Helper to append `userCode` to a path as a query param when available.
+const withUserCode = (path) => {
+  try {
+    let code = localStorage.getItem('userCode');
+    if (!code) {
+      const ud = localStorage.getItem('userData');
+      if (ud) {
+        const parsed = JSON.parse(ud);
+        if (parsed && parsed.code) code = parsed.code;
+      }
+    }
+    if (code) return `${path}${path.includes('?') ? '&' : '?'}userCode=${encodeURIComponent(code)}`;
+  } catch (e) {
+    // ignore
+  }
+  return path;
+};
+
 // Simple in-memory cache for GET requests to avoid unnecessary refetches under heavy load.
 const _cache = new Map();
 const getCached = (key, fn, ttl = 30000) => {
@@ -35,7 +53,20 @@ export const clearCacheKey = (key) => {
 
 // Add user code to headers if available
 api.interceptors.request.use((config) => {
-  const userCode = localStorage.getItem("userCode");
+  let userCode = localStorage.getItem("userCode");
+  // If a direct userCode isn't stored (possible in some sessions), try to
+  // recover it from the stored user object which includes `code`.
+  if (!userCode) {
+    try {
+      const ud = localStorage.getItem("userData");
+      if (ud) {
+        const parsed = JSON.parse(ud);
+        if (parsed && parsed.code) userCode = parsed.code;
+      }
+    } catch (e) {
+      // ignore JSON parse errors
+    }
+  }
   if (userCode) {
     config.headers["user-code"] = userCode;
   }
@@ -308,16 +339,42 @@ export const adminAPI = {
   getTimeSeries: (days = 30) =>
     api.get(`/api/admin/stats/timeseries?days=${days}`),
   getLectureByIdAdmin: (id) => api.get(`/api/admin/lectures/${id}`),
-  validateAllVideos: (mirror = false) => api.post('/api/admin/videos/validate-all', { mirror }),
-  getValidateJob: (jobId) => api.get(`/api/admin/videos/validate-all/${jobId}`),
-  getLatestValidateJob: () => api.get(`/api/admin/videos/validate-all/latest`),
-  pauseValidateJob: (jobId) => api.post(`/api/admin/videos/validate-all/${jobId}/pause`),
-  resumeValidateJob: (jobId) => api.post(`/api/admin/videos/validate-all/${jobId}/resume`),
-  deleteValidateJob: (jobId) => api.delete(`/api/admin/videos/validate-all/${jobId}`),
-  stopValidateJob: (jobId) => api.post(`/api/admin/videos/validate-all/${jobId}/stop`),
-  listValidateJobs: () => api.get(`/api/admin/videos/validate-all/jobs`),
-  revalidateJobVideo: (jobId, videoId) => api.post(`/api/admin/videos/validate-all/${jobId}/revalidate/${videoId}`),
-  getAllVideos: () => api.get('/api/admin/videos'),
+  // Lightweight admin helpers for lecture/video lists and revalidation controls
+  getLecturesHealth: async () => {
+    try {
+      const res = await treeAPI.getContentTree();
+      const tree = res?.data || [];
+      const list = [];
+      for (const material of tree) {
+        const instructors = material.instructors || [];
+        for (const instructor of instructors) {
+          const chapters = instructor.chapters || [];
+          for (const chapter of chapters) {
+            const lectures = chapter.lectures || [];
+            for (const lecture of lectures) {
+              list.push({ material, instructor, chapter, lecture });
+            }
+          }
+        }
+      }
+      return { data: { lectures: list } };
+    } catch (e) {
+      return { data: { lectures: [] } };
+    }
+  },
+  getLectureVideosDebug: async (lectureId) => {
+    try {
+      const res = await videosAPI.getVideosByLecture(lectureId);
+      return { data: { lectureId, videos: res?.data || [] } };
+    } catch (e) {
+      return { data: { lectureId, videos: [] } };
+    }
+  },
+  getAllVideos: () => api.get(withUserCode('/api/admin/videos')),
+  getVideoStatusSummary: () => api.get('/api/admin/videos/status-summary'),
+  recheckVideo: (videoId) => api.post(`/api/admin/videos/${videoId}/recheck`),
+  // history/metrics removed to avoid storing large per-probe logs
+  // Legacy validation admin APIs removed
 };
 
 // PDFs API
@@ -369,8 +426,8 @@ export const pdfsAPI = {
   getPdfViewers: (id) => api.get(`/api/pdfs/${id}/viewers`),
 };
 
-// Videos API - REMOVED: All video functionality has been removed from the project
-// export const videosAPI = { ... }
+// Videos API - lightweight helpers and admin revalidation endpoints
+// (playlist/sign/proxy/download remain implemented on backend)
 // Videos API
 export const videosAPI = {
   createVideo: (title, duration, lectureId, qualities) =>
@@ -393,12 +450,8 @@ export const videosAPI = {
   // Delete a video (admin)
   deleteVideo: (videoId) => api.delete(`/api/videos/${videoId}`),
   updateVideo: (videoId, body) => api.put(`/api/videos/${videoId}`, body),
-  // Public: get quick availability summary for lecture videos
-  getLectureAvailability: (lectureId) => api.get(`/api/videos/public/lecture/${lectureId}/availability`),
-  signSegment: (videoId, quality, segmentNumber) =>
-    api.post(`/api/videos/${videoId}/sign`, { quality, segmentNumber }),
-  validateVideo: (videoId, mirror = false) =>
-    api.post(`/api/admin/videos/${videoId}/validate`, { mirror }),
+  // Public: get lightweight availability summary for a lecture
+  getLectureAvailability: (lectureId) => api.get(`/api/videos/lecture/${lectureId}/availability`),
 };
 
 // Search API

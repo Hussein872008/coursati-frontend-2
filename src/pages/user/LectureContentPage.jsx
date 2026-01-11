@@ -8,7 +8,9 @@ import api, {
   lecturesAPI,
   materialAPI,
   instructorAPI,
+  adminAPI,
 } from "../../utils/api";
+import { toast } from 'react-toastify';
 import UserHeader from "../../components/user/UserHeader";
 import UserFooter from "../../components/user/UserFooter";
 import VideoPlayer from "../../components/VideoPlayer";
@@ -38,6 +40,7 @@ const LectureContentPage = () => {
   const [chapter, setChapter] = useState(null);
   const [material, setMaterial] = useState(null);
   const [instructor, setInstructor] = useState(null);
+  // validation removed: no-op in UI
   const [lecture, setLecture] = useState(null);
   const [videos, setVideos] = useState([]);
   const [videosLoading, setVideosLoading] = useState(false);
@@ -65,13 +68,13 @@ const LectureContentPage = () => {
     (chapter?.instructorId && typeof chapter.instructorId === "object"
       ? chapter.instructorId.materialId
       : chapter?.instructorId && chapter.instructorId?.materialId);
+
   const breadcrumbInstructorId =
     instructor?._id ||
     (chapter?.instructorId &&
       (typeof chapter.instructorId === "string"
         ? chapter.instructorId
-        : chapter.instructorId?._id)) ||
-    chapter?.instructor?._id;
+        : chapter?.instructorId && chapter.instructorId?._id));
 
   useTitle("كورساتي — محتوى المحاضرة");
 
@@ -243,8 +246,9 @@ const LectureContentPage = () => {
         const list = res.data || [];
         // normalize availability flag for each video
         const enhanced = (list || []).map((v) => {
+          if (!v) return v;
           const quals = Array.isArray(v.qualities) ? v.qualities : [];
-          const available = quals.some((q) => (q && (q.lastSegmentUrl || q.url)));
+          const available = quals.some((q) => q && (q.lastSegmentUrl || q.url));
           return { ...v, _available: !!available };
         });
         setVideos(enhanced);
@@ -253,13 +257,29 @@ const LectureContentPage = () => {
           try {
             const avRes = await videosAPI.getLectureAvailability(lectureId);
             const av = avRes && avRes.data;
-            if (av && Array.isArray(av.perVideo)) {
+            if (av && av.perVideo) {
               const map = {};
-              av.perVideo.forEach((p) => {
-                try { map[String(p.videoId)] = !!p.available; } catch (e) {}
-              });
+              try {
+                if (Array.isArray(av.perVideo)) {
+                  av.perVideo.forEach((p) => {
+                    try { map[String(p.videoId)] = !!p.available; } catch (e) {}
+                  });
+                } else if (typeof av.perVideo === 'object') {
+                  // backend currently returns a map of videoId -> status string
+                  Object.entries(av.perVideo).forEach(([k, v]) => {
+                    try { map[String(k)] = (String(v) === 'working'); } catch (e) {}
+                  });
+                }
+              } catch (e) {}
+              // Override local flags with authoritative DB-derived availability
               setVideos((prev) =>
-                (prev || []).map((v) => ({ ...v, _available: typeof map[String(v._id)] === 'boolean' ? map[String(v._id)] : v._available }))
+                (prev || []).map((v) => {
+                  try {
+                    const key = String(v._id);
+                    if (typeof map[key] === 'boolean') return { ...v, _available: map[key] };
+                  } catch (e) {}
+                  return v;
+                })
               );
             }
           } catch (e) {
@@ -616,12 +636,12 @@ const LectureContentPage = () => {
                                 </div>
                               </div>
                             </div>
-                            {!isAvailable && (
-                              <div className="mt-2 text-sm text-red-400 flex items-start gap-2">
-                                <XCircleIcon className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                                <span>هذا الفيديو غير متاح حالياً. يرجى محاولة لاحقاً.</span>
-                              </div>
-                            )}
+                              {!isAvailable && (
+                                <div className="mt-2 text-sm text-red-400 flex items-start gap-2">
+                                  <XCircleIcon className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                                  <span>هذا الفيديو غير متاح حالياً. يرجى محاولة لاحقاً.</span>
+                                </div>
+                              )}
                           </div>
                           {prog && (
                             <div className="mt-2 px-1">

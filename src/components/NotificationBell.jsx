@@ -43,6 +43,30 @@ const NotificationBell = () => {
     return () => clearInterval(id);
   }, []);
 
+  // SSE for all users (public + authenticated): receive immediate notifications
+  useEffect(() => {
+    try {
+      const userCodeParam = user && user.code ? `?userCode=${encodeURIComponent(user.code)}` : '';
+      const es = new EventSource(`/api/notifications/stream${userCodeParam}`);
+      es.addEventListener('message', (ev) => {
+        try {
+          const payload = JSON.parse(ev.data);
+          setNotifications((prev) => [payload].concat(prev));
+          try { localStorage.setItem('latestNotifShown', payload._id); } catch (e) {}
+          setToast(payload);
+          setTimeout(() => setToast(null), 6000);
+        } catch (e) {}
+      });
+      es.onerror = () => {
+        try { es.close(); } catch (e) {}
+      };
+      return () => {
+        try { es.close(); } catch (e) {}
+      };
+    } catch (e) {}
+    return undefined;
+  }, [user]);
+
   // Close on Escape key when modal is open
   useEffect(() => {
     if (!open) return;

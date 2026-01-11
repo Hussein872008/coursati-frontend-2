@@ -14,6 +14,16 @@ export default defineConfig({
   resolve: {
     dedupe: ['react', 'react-dom'],
   },
+  server: {
+    // Proxy /api requests to backend during local development so SSE and API calls reach the server
+    proxy: {
+      '/api': {
+        target: 'http://localhost:5000',
+        changeOrigin: true,
+        secure: false,
+      },
+    },
+  },
 
   optimizeDeps: {
     include: ['react', 'react-dom'],

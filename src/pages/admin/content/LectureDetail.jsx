@@ -52,6 +52,17 @@ const LectureDetailWithMedia = () => {
   const [isUploadingPdf, setIsUploadingPdf] = useState(false);
 
   // Viewer UI states
+
+                                        <div className="ml-2">
+                                          <button
+                                            onClick={(e) => { e.stopPropagation(); handleRecheckVideo(video); }}
+                                            className="w-full sm:w-auto flex items-center gap-2 text-sm text-white px-3 py-1 bg-gradient-to-r from-indigo-600 to-blue-600 rounded-lg hover:from-indigo-700 hover:to-blue-700 transition-all"
+                                            title="إعادة فحص الحالة"
+                                          >
+                                            ↻
+                                            <span className="hidden sm:inline">إعادة فحص</span>
+                                          </button>
+                                        </div>
   const [pdfViewersMap, setPdfViewersMap] = useState({});
   const [pdfViewersLoadingId, setPdfViewersLoadingId] = useState(null);
   // `activePdfId` is the PDF whose viewers popover is open (click-to-toggle)
@@ -59,10 +70,6 @@ const LectureDetailWithMedia = () => {
   // Video viewers UI
   const [videoViewersMap, setVideoViewersMap] = useState({});
   const [videoViewersLoadingId, setVideoViewersLoadingId] = useState(null);
-  const [currentRunningVideoId, setCurrentRunningVideoId] = useState(null);
-  const prevJobRef = useRef(null);
-  const [flashVideoId, setFlashVideoId] = useState(null);
-  const [flashStatus, setFlashStatus] = useState(null);
   const [videoStatusMap, setVideoStatusMap] = useState({});
   const [videoDownloadsMap, setVideoDownloadsMap] = useState({});
   const [videoDownloadsLoadingId, setVideoDownloadsLoadingId] = useState(null);
@@ -381,16 +388,28 @@ const LectureDetailWithMedia = () => {
           .catch(async () => {
             await api.put(`/api/admin/videos/${editingVideo._id}`, payload);
           });
-        // trigger immediate validation for the updated video
+        // validation subsystem removed; just reload videos
         try {
-          setValidatingMap((m) => ({ ...m, [editingVideo._id]: true }));
-          await videosAPI.validateVideo(editingVideo._id, false);
-          toast.info("تم طلب التحقق من الفيديو");
+          await loadVideos();
         } catch (e) {
-          console.warn("Failed to trigger validate for video", e);
-          toast.warn("فشل بدء التحقق التلقائي من الفيديو");
-        } finally {
-          setValidatingMap((m) => ({ ...m, [editingVideo._id]: false }));
+          console.error('reload videos failed', e);
+        }
+        // trigger a recheck for the edited video so status is updated
+        try {
+          const vid = String(editingVideo._id);
+          // optimistic UI: mark checking
+          setVideoStatusMap((s) => ({ ...(s || {}), [vid]: 'checking' }));
+          // fire-and-forget recheck; we'll refresh statuses shortly
+          adminAPI.recheckVideo(vid).then(() => {
+            toast.success(`بدأنا إعادة الفحص لـ "${editingVideo.title || vid}"`);
+            setTimeout(() => fetchStatuses(), 2000);
+          }).catch((err) => {
+            console.error('recheck after edit failed', err);
+            // ensure we synchronize
+            fetchStatuses();
+          });
+        } catch (e) {
+          // ignore
         }
         setEditingVideo(null);
       } else {
@@ -562,99 +581,45 @@ const LectureDetailWithMedia = () => {
     return () => document.removeEventListener("mousedown", handleDocClick);
   }, []);
 
-  // Poll validation job to mark running video in this lecture
-  useEffect(() => {
-    let id = null;
-    const poll = async () => {
-      try {
-        // fetch the latest running/recent validation job from server
-        const resLatest = await adminAPI.getLatestValidateJob();
-        const job = resLatest?.data?.job || null;
-        if (!job) {
-          setCurrentRunningVideoId(null);
-          setVideoStatusMap({});
-          prevJobRef.current = null;
-          return;
-        }
-        const prev = prevJobRef.current;
-        // build status map from job.videos
-        try {
-          const map = {};
-          if (job && Array.isArray(job.videos)) {
-            job.videos.forEach((it) => {
-              const vid = String(it.videoId || it._id || "");
-              if (!vid) return;
-              if (typeof it.ok !== 'undefined') {
-                map[vid] = it.ok ? 'ok' : 'failed';
-              } else if (it && it.results) {
-                // infer from results: if any quality has a segment with ok=true => ok
-                try {
-                  let inferred = null;
-                  const res = it.results;
-                  for (const k of Object.keys(res || {})) {
-                    const arr = res[k] || [];
-                    if (arr.some((r) => r && r.ok === true)) { inferred = 'ok'; break; }
-                    if (arr.some((r) => r && r.ok === false)) inferred = inferred || 'failed';
-                  }
-                  map[vid] = inferred || 'unknown';
-                } catch (e) {
-                  map[vid] = 'unknown';
-                }
-              } else {
-                map[vid] = 'unknown';
-              }
-            });
-          }
-          if (job && job.currentVideo) {
-            const runningId = String(job.currentVideo.videoId || job.currentVideo._id || "");
-            if (runningId) map[runningId] = 'running';
-          }
-          setVideoStatusMap(map);
-        } catch (e) {
-          // ignore map build errors
-        }
-        if (job && job.currentVideo) {
-          const vid = String(job.currentVideo.videoId || job.currentVideo._id || "");
-          setCurrentRunningVideoId(vid || null);
-        } else {
-          setCurrentRunningVideoId(null);
-        }
-
-        // detect transition: previously-running video now has a job result
-        try {
-          if (
-            prev &&
-            prev.currentVideo &&
-            job &&
-            Array.isArray(job.videos)
-          ) {
-            const prevVid = String(prev.currentVideo.videoId || prev.currentVideo._id || "");
-            if (prevVid) {
-              const found = job.videos.find((it) => String(it.videoId) === prevVid || String(it._id) === prevVid);
-              if (found && typeof found.ok !== 'undefined') {
-                // only show toast/flash if this lecture contains that video
-                const localVideo = videos.find((vv) => String(vv._id) === prevVid);
-                if (localVideo) {
-                  if (found.ok) toast.success(`الفيديو "${found.title || localVideo.title}" أصبح متاحًا ✅`);
-                  else toast.error(`التحقق من الفيديو "${found.title || localVideo.title}" فشل ❌`);
-                  setFlashVideoId(prevVid);
-                  setFlashStatus(found.ok ? 'ok' : 'failed');
-                  setTimeout(() => { setFlashVideoId(null); setFlashStatus(null); }, 3500);
-                }
-              }
-            }
-          }
-        } catch (e) { /* ignore */ }
-
-        prevJobRef.current = job;
-      } catch (e) {
-        // ignore
+  // Fetch current video statuses from server-side authoritative field
+  // Fetch current video statuses from server-side authoritative field
+  const fetchStatuses = async () => {
+    try {
+      const res = await videosAPI.getLectureAvailability(lectureId);
+      const data = res?.data || null;
+      if (data && data.perVideo) {
+        setVideoStatusMap(data.perVideo);
       }
-    };
-    poll();
-    id = setInterval(poll, 2000);
-    return () => clearInterval(id);
-  }, []);
+    } catch (e) {
+      // ignore availability fetch errors
+    }
+  };
+
+  useEffect(() => {
+    let mounted = true;
+    if (lectureId) {
+      fetchStatuses();
+    }
+    return () => { mounted = false; };
+  }, [lectureId]);
+
+  const handleRecheckVideo = async (video) => {
+    if (!video || !video._id) return;
+    const id = String(video._id);
+    // optimistic
+    setVideoStatusMap((s) => ({ ...(s || {}), [id]: 'checking' }));
+    try {
+      await adminAPI.recheckVideo(id);
+      toast.success(`بدأنا إعادة الفحص لـ "${video.title || id}"`);
+      // fetch updated statuses after short delay
+      setTimeout(() => fetchStatuses(), 2000);
+    } catch (e) {
+      console.error('recheck failed', e);
+      toast.error('فشل إعادة الفحص');
+      // refetch to sync
+      fetchStatuses();
+    }
+  };
 
   // Video viewers fetching removed - video functionality has been removed from the project
 
@@ -1257,7 +1222,12 @@ const LectureDetailWithMedia = () => {
                                   transition={{ delay: index * 0.05 }}
                                   whileHover={{ y: -5 }}
                                   id={`video-${video._id}`}
-                                  className={`group relative bg-gradient-to-r from-gray-800/40 to-gray-900/40 backdrop-blur-sm border border-white/10 rounded-2xl p-6 hover:border-cyan-500/30 hover:shadow-2xl hover:shadow-cyan-500/10 transition-all duration-500 ${flashVideoId===String(video._id) ? (flashStatus==='ok' ? 'ring-4 ring-emerald-400/30' : 'ring-4 ring-red-500/25') : ''}`}
+                                  className={`group relative bg-gradient-to-r from-gray-800/40 to-gray-900/40 backdrop-blur-sm border border-white/10 rounded-2xl p-6 hover:border-cyan-500/30 hover:shadow-2xl hover:shadow-cyan-500/10 transition-all duration-500 ${(() => {
+                                    const st = (videoStatusMap && videoStatusMap[String(video._id)]) || video.status || 'unknown';
+                                    if (st === 'working') return 'ring-4 ring-emerald-400/30';
+                                    if (st === 'broken') return 'ring-4 ring-red-500/25';
+                                    return '';
+                                  })()}`}
                                 >
                                   <div className="flex gap-6 items-center">
                                     {/* Content Left */}
@@ -1266,29 +1236,12 @@ const LectureDetailWithMedia = () => {
                                         <span className="px-3 py-1 bg-gradient-to-r from-cyan-600 to-blue-600 text-white text-xs font-semibold rounded-full shadow">
                                           فيديو #{index + 1}
                                         </span>
-                                        {currentRunningVideoId && String(currentRunningVideoId) === String(video._id) && (
-                                          <span className="ml-2 inline-flex items-center gap-2 px-2 py-1 bg-yellow-500 text-white rounded text-xs">
-                                            <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4l3-3-3-3v4a12 12 0 00-12 12h4z"></path></svg>
-                                            جاري
-                                          </span>
-                                        )}
-
-                                        {/* status badge from last validation job */}
-                                        {(!currentRunningVideoId || String(currentRunningVideoId) !== String(video._id)) && (() => {
-                                          const st = videoStatusMap && videoStatusMap[String(video._id)];
-                                          if (!st) {
-                                            return (<span className="ml-2 inline-flex items-center gap-2 px-2 py-1 bg-gray-500 text-white rounded text-xs">غير معروف</span>);
-                                          }
-                                          if (st === 'ok') {
-                                            return (<span className="ml-2 inline-flex items-center gap-2 px-2 py-1 bg-emerald-500 text-white rounded text-xs">شغال</span>);
-                                          }
-                                          if (st === 'failed') {
-                                            return (<span className="ml-2 inline-flex items-center gap-2 px-2 py-1 bg-red-500 text-white rounded text-xs">مش شغال</span>);
-                                          }
-                                          if (st === 'unknown') {
-                                            return (<span className="ml-2 inline-flex items-center gap-2 px-2 py-1 bg-gray-500 text-white rounded text-xs">غير معروف</span>);
-                                          }
-                                          return null;
+                                        {(() => {
+                                          const st = (videoStatusMap && videoStatusMap[String(video._id)]) || video.status || 'unknown';
+                                          if (st === 'working') return (<span className="ml-2 inline-flex items-center gap-2 px-2 py-1 bg-emerald-500 text-white rounded text-xs">شغال</span>);
+                                          if (st === 'broken') return (<span className="ml-2 inline-flex items-center gap-2 px-2 py-1 bg-red-500 text-white rounded text-xs">معطل</span>);
+                                          if (st === 'checking') return (<span className="ml-2 inline-flex items-center gap-2 px-2 py-1 bg-amber-500 text-white rounded text-xs">جارٍ التحقق</span>);
+                                          return (<span className="ml-2 inline-flex items-center gap-2 px-2 py-1 bg-gray-500 text-white rounded text-xs">غير معروف</span>);
                                         })()}
                                         <span className="text-xs text-white/50">
                                           #{video._id.slice(0, 8)}
@@ -1413,33 +1366,7 @@ const LectureDetailWithMedia = () => {
                                         </div>
 
                                         <div className="flex items-center gap-2 ml-auto">
-                                          <button
-                                            onClick={async () => {
-                                              setValidatingMap((m) => ({ ...m, [video._id]: true }));
-                                              try {
-                                                // prefer an existing running job
-                                                const latestRes = await adminAPI.getLatestValidateJob();
-                                                let job = latestRes?.data?.job || null;
-                                                if (!job || job.status !== 'running') {
-                                                  const startRes = await adminAPI.validateAllVideos(false);
-                                                  const newJobId = startRes?.data?.jobId;
-                                                  if (newJobId) job = { id: newJobId, status: 'running' };
-                                                }
-                                                if (!job || !job.id) throw new Error('no-validate-job');
-                                                await adminAPI.revalidateJobVideo(job.id, video._id);
-                                                toast.success('طلب التحقق اُضيف إلى طابور التحقق');
-                                              } catch (err) {
-                                                console.error('validate video error', err && (err.message || err));
-                                                toast.error('فشل بدء التحقق');
-                                              } finally {
-                                                setValidatingMap((m) => { const nm = { ...m }; delete nm[video._id]; return nm; });
-                                              }
-                                            }}
-                                            className="text-xs px-2 py-1 bg-white/10 hover:bg-white/20 text-white/80 rounded transition-colors"
-                                            title="تحقق من الفيديو"
-                                          >
-                                            {validatingMap[video._id] ? 'جارٍ...' : 'تحقق'}
-                                          </button>
+                                          
 
                                           <button
                                             onClick={() =>

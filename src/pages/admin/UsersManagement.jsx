@@ -1574,7 +1574,7 @@ const UsersManagement = () => {
       )}
 
       {/* Custom Styles */}
-      <style jsx="true">{`
+      <style>{`
         @keyframes fadeIn {
           from {
             opacity: 0;

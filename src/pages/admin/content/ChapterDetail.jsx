@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
-import { chapterAPI, lecturesAPI, clearCacheKey, videosAPI } from "../../../utils/api";
+import { chapterAPI, lecturesAPI, clearCacheKey, videosAPI, adminAPI } from "../../../utils/api";
+import { toast } from 'react-toastify';
 import { Eye } from "lucide-react";
 import AdminBreadcrumb from "../../../components/admin/AdminBreadcrumb";
 import CloudinaryImageInput from "../../../components/CloudinaryImageInput";
@@ -107,21 +108,62 @@ const ChapterDetail = () => {
     };
   }, []);
 
-  // Load per-lecture video availability stats (total videos, broken count)
+  // Load per-lecture video availability stats (try aggregated admin API first)
   useEffect(() => {
     if (!lectures || lectures.length === 0) return;
     let cancelled = false;
 
     (async () => {
+      // Try aggregated endpoint to get per-lecture videos in one call
+      try {
+        const res = await adminAPI.getVideoStatusSummary();
+        const perLecture = res?.data?.perLecture || [];
+        const map = {};
+        perLecture.forEach((pl) => {
+          const lid = String(pl.lectureId);
+          map[lid] = {
+            total: pl.total || 0,
+            broken: pl.broken || 0,
+            videos: Array.isArray(pl.videos)
+              ? pl.videos.map((v) => ({ videoId: v._id, title: v.title, status: v.status, duration: v.duration }))
+              : undefined,
+            lastUpdated: pl.lastUpdated,
+          };
+        });
+
+        if (!cancelled) {
+          setVideoStats((s) => {
+            const out = { ...(s || {}) };
+            lectures.forEach((l) => {
+              const key = String(l._id);
+              if (map[key]) out[key] = map[key];
+            });
+            return out;
+          });
+        }
+        return;
+      } catch (err) {
+        // aggregated API failed — fall back to per-lecture requests
+      }
+
+      // Fallback: fetch per-lecture videos individually
       const ids = lectures.map((l) => l._id);
-      // fetch in parallel but tolerate individual failures
       const promises = ids.map(async (id) => {
         try {
           setLoadingVideoStats((s) => ({ ...s, [id]: true }));
-          const res = await videosAPI.getLectureAvailability(id);
-          if (cancelled) return;
-          const data = res && res.data ? res.data : null;
-          setVideoStats((s) => ({ ...s, [id]: data }));
+          try {
+            const res = await videosAPI.getVideosByLecture(id);
+            if (cancelled) return;
+            const vids = (res && res.data) || [];
+            const perVideo = (vids || []).map((v) => {
+              const available = !!(v && Array.isArray(v.qualities) && v.qualities.length > 0 && v.qualities.some((q) => q && q.lastSegmentUrl));
+              return { videoId: v._id, title: v.title, available };
+            });
+            const brokenCount = perVideo.filter((p) => !p.available).length;
+            setVideoStats((s) => ({ ...s, [id]: { total: vids.length, broken: brokenCount, perVideo } }));
+          } catch (err) {
+            if (!cancelled) setVideoStats((s) => ({ ...s, [id]: null }));
+          }
         } catch (err) {
           if (!cancelled) setVideoStats((s) => ({ ...s, [id]: null }));
         } finally {
@@ -140,6 +182,43 @@ const ChapterDetail = () => {
       cancelled = true;
     };
   }, [lectures]);
+
+  const handleRecheckLecture = async (lecture) => {
+    const lid = lecture._id;
+    const stats = videoStats[lid];
+    if (!stats || !Array.isArray(stats.videos) || stats.videos.length === 0) {
+      toast.info('مافيش بيانات فيديوهات للمحاضرة دي لإعادة الفحص');
+      return;
+    }
+    setLoadingVideoStats((s) => ({ ...s, [lid]: true }));
+    try {
+      const calls = stats.videos.map((v) => {
+        const vid = v.videoId || v._id || v.id;
+        if (!vid) return Promise.resolve({ status: 'skipped' });
+        return adminAPI.recheckVideo(vid).catch((e) => ({ error: e }));
+      });
+      await Promise.allSettled(calls);
+      toast.success(`بدأنا إعادة الفحص لمحاضرة "${lecture.title || lid}"`);
+      // refresh aggregated stats
+      try {
+        const res = await adminAPI.getVideoStatusSummary();
+        const perLecture = res?.data?.perLecture || [];
+        const map = {};
+        perLecture.forEach((pl) => {
+          const key = String(pl.lectureId);
+          map[key] = { total: pl.total || 0, broken: pl.broken || 0, videos: pl.videos };
+        });
+        setVideoStats((s) => ({ ...(s || {}), [lid]: map[String(lid)] || s[lid] }));
+      } catch (e) {
+        // ignore
+      }
+    } catch (e) {
+      console.error('bulk recheck failed', e);
+      toast.error('فشل بدء إعادة الفحص');
+    } finally {
+      setLoadingVideoStats((s) => ({ ...s, [lid]: false }));
+    }
+  };
 
   const handleDeleteChapter = async () => {
     if (
@@ -186,7 +265,7 @@ const ChapterDetail = () => {
         <div className="animate-pulse space-y-6">
           <div className="h-8 bg-white/10 rounded w-1/4"></div>
           <div className="p-8 rounded-2xl bg-gradient-to-r from-gray-800/40 to-gray-900/40 backdrop-blur-sm border border-white/10">
-            <div className="flex items-center gap-6">
+                        <div className="mt-3 flex items-center gap-3">
               <div className="h-32 w-32 bg-white/10 rounded-xl"></div>
               <div className="space-y-3 flex-1">
                 <div className="h-8 bg-white/10 rounded w-1/3"></div>

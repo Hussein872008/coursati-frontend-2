@@ -25,6 +25,8 @@ const AdminLayout = lazy(() => import("./layouts/AdminLayout"));
 // Lazy load admin pages
 const UsersManagement = lazy(() => import("./pages/admin/UsersManagement"));
 const AdminDashboard = lazy(() => import("./pages/admin/AdminDashboard"));
+const AdminVideoStatusOverview = lazy(() => import("./pages/admin/AdminVideoStatusOverview"));
+// Video history/metrics pages removed to simplify monitoring UI
 const MaterialsList = lazy(() => import("./pages/admin/content/MaterialsList"));
 const MaterialDetail = lazy(
   () => import("./pages/admin/content/MaterialDetail"),
@@ -35,7 +37,6 @@ const InstructorDetail = lazy(
 const ChapterDetail = lazy(() => import("./pages/admin/content/ChapterDetail"));
 const LectureDetail = lazy(() => import("./pages/admin/content/LectureDetail"));
 const AdminLectureRedirect = lazy(() => import("./pages/admin/content/AdminLectureRedirect"));
-const LecturesHealth = lazy(() => import("./pages/admin/content/LecturesHealth"));
 
 // Loading fallback component
 const LoadingFallback = () => (
@@ -256,6 +257,15 @@ export const router = createBrowserRouter([
         ),
       },
       {
+        path: "videos-status",
+        element: (
+          <Suspense fallback={<LoadingFallback />}>
+            <AdminVideoStatusOverview />
+          </Suspense>
+        ),
+      },
+      // history and probe-metrics routes removed
+      {
         path: "users",
         element: (
           <Suspense fallback={<LoadingFallback />}>
@@ -296,14 +306,8 @@ export const router = createBrowserRouter([
           </Suspense>
         ),
       },
-      {
-        path: "content/lectures-health",
-        element: (
-          <Suspense fallback={<LoadingFallback />}>
-            <LecturesHealth />
-          </Suspense>
-        ),
-      },
+      // lectures-health admin page removed
+      
       {
         path: "content/materials/:materialId/instructors/:instructorId/chapters/:chapterId/lectures",
         element: <RedirectLecturesToChapter />,
